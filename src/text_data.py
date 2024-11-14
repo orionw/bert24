@@ -506,6 +506,7 @@ class NoStreamingDataset(Dataset):
                 else:
                     del sample[k]
             if "attention_mask" not in sample:
+                # Create padding mask (1s for valid tokens)
                 sample["attention_mask"] = np.ones_like(sample["input_ids"])
             return sample
         elif "text" in sample:

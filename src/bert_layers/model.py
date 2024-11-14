@@ -64,6 +64,7 @@ from transformers.modeling_outputs import (
     ModelOutput,
     MultipleChoiceModelOutput,
     SequenceClassifierOutput,
+    CausalLMOutput,
 )
 from transformers.models.bert.modeling_bert import BertPreTrainedModel
 
@@ -1126,6 +1127,7 @@ class FlexBertForMaskedLM(FlexBertPreTrainedModel):
             input_ids, indices, cu_seqlens, max_seqlen, position_ids, labels = self.unpad_inputs(
                 input_ids, attention_mask, position_ids, labels
             )
+        
 
         output = self.bert(
             input_ids,
@@ -1496,6 +1498,236 @@ class FlexBertForMultipleChoice(FlexBertPreTrainedModel):
         params = self.bert.get_number_parameters(count_embeddings, trainable)
         params += _count_parameters(self.head, trainable)
         params += _count_parameters(self.classifier, trainable)
+        return params
+
+
+class FlexBertForCasualLM(FlexBertPreTrainedModel):
+    """Bert Model transformer with a LM head.
+
+    This head is just a standard LM head module. Used for causal language modeling tasks.
+    """
+
+    def __init__(self, config: FlexBertConfig):
+        super().__init__(config)
+        self.bert = FlexBertModel(config)
+        self.lm_head = FlexBertPredictionHead(config)
+
+        if config.tie_word_embeddings:
+            decoder_weights = self.bert.embeddings.tok_embeddings.weight
+        else:
+            decoder_weights = nn.Linear(config.hidden_size, config.vocab_size, bias=False).weight
+        self.decoder = nn.Linear(decoder_weights.size(1), decoder_weights.size(0), bias=config.decoder_bias)
+        self.decoder.weight = decoder_weights
+
+        self.loss_fn = nn.CrossEntropyLoss() if not hasattr(config, "loss_function") else get_loss_fn(config)
+        self.fa_ce = getattr(config, "loss_function", "cross_entropy") == "fa_cross_entropy"
+        self.return_z_loss = config.loss_kwargs.get("return_z_loss", False)
+        self.unpad_embeddings = config.unpad_embeddings
+        self.pad_logits = config.pad_logits
+        self.compile_model = config.compile_model
+        # self.masked_prediction = config.masked_prediction
+
+        # Initialize weights and apply final processing
+        self._init_weights(reset_params=False)
+
+    def _init_weights(self, module: Optional[nn.Module] = None, reset_params: Optional[bool] = None):
+        assert (module is None) != (reset_params is None), "arg module xor reset_params must be specified"
+        if module:
+            self._init_module_weights(module)
+        else:
+            assert isinstance(reset_params, bool)
+            self.bert._init_weights(reset_params=reset_params)
+            self.lm_head._init_weights(reset_params=reset_params)
+
+            if not self.config.tie_word_embeddings:
+                init_weights(self.config, self.decoder, self.config.hidden_size, type_of_module=ModuleType.final_out)
+
+    @classmethod
+    def from_composer(
+        cls,
+        pretrained_checkpoint,
+        state_dict=None,
+        cache_dir=None,
+        from_tf=False,
+        config=None,
+        *inputs,
+        **kwargs,
+    ):
+        """Load from pre-trained."""
+        model = cls(config, *inputs, **kwargs)
+        if from_tf:
+            raise ValueError("Mosaic BERT does not support loading TensorFlow weights.")
+
+        state_dict = torch.load(pretrained_checkpoint)
+        # If the state_dict was saved after wrapping with `composer.HuggingFaceModel`, it takes on the `model` prefix
+        consume_prefix_in_state_dict_if_present(state_dict, prefix="model.")
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+
+        if len(missing_keys) > 0:
+            logger.warning(f"Found these missing keys in the checkpoint: {', '.join(missing_keys)}")
+        if len(unexpected_keys) > 0:
+            logger.warning(f"Found these unexpected keys in the checkpoint: {', '.join(unexpected_keys)}")
+
+        return model
+
+
+    def get_output_embeddings(self):
+        return self.decoder
+
+    def set_output_embeddings(self, new_embeddings):
+        self.decoder = new_embeddings
+
+    @torch.no_grad()
+    def unpad_inputs(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor, position_ids: torch.Tensor, labels: torch.Tensor
+    ):
+        return unpad_input(input_ids, attention_mask, position_ids, labels)
+
+    @torch.no_grad()
+    def pad_inputs(
+        self,
+        inputs: torch.Tensor,
+        indices: torch.Tensor,
+        batch_size: int,
+        seqlen: int,
+        labels: Optional[torch.Tensor] = None,
+        ignore_index: int = -100,
+    ):
+        return pad_input(
+            inputs=inputs, indices=indices, batch=batch_size, seqlen=seqlen, labels=labels, ignore_index=ignore_index
+        )
+
+    @torch.compile(dynamic=True)
+    def compiled_lm_head(self, output: torch.Tensor) -> torch.Tensor:
+        return self.decoder(self.lm_head(output))
+
+    def forward(
+        self,
+        input_ids: Optional[torch.Tensor],
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        return_dict: Optional[bool] = None,
+        indices: Optional[torch.Tensor] = None,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        seq_len: Optional[int] = None,
+        **kwargs,
+    ) -> Union[Tuple[torch.Tensor], CausalLMOutput]:
+        # labels should be a `torch.LongTensor` of shape
+        # `(batch_size, sequence_length)`. These are used for computing the
+        #  masked language modeling loss.
+        #
+        # Indices should be in `[-100, 0, ..., config.vocab_size]` (see
+        # `input_ids` docstring) Tokens with indices set to `-100` are ignored
+        # (masked), the loss is only computed for the tokens with labels in `[0,
+        # ..., config.vocab_size]`
+        #
+        # Prediction scores are only computed for masked tokens and the (bs,
+        # seqlen) dimensions are flattened
+
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        if self.unpad_embeddings and (indices is None and cu_seqlens is None and max_seqlen is None):
+            batch_size, seq_len = input_ids.shape[:2]
+            input_ids, indices, cu_seqlens, max_seqlen, position_ids, labels = self.unpad_inputs(
+                input_ids, attention_mask, position_ids, labels
+            )
+
+        hidden_states = self.bert(
+            input_ids,
+            attention_mask=None,
+            position_ids=position_ids,
+            indices=indices,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+        )
+
+        if self.compile_model:
+            logits = self.compiled_lm_head(hidden_states)
+        else:
+            logits = self.lm_head(hidden_states)
+        
+        loss = None
+        if labels is not None:
+            if indices is not None:                
+                # Unpadded case: shift within each sequence using input_ids
+                # Initialize shifted labels from input_ids
+                shift_labels = torch.full_like(input_ids, -100)
+                
+                # For each sequence, shift the input_ids to create labels
+                for i in range(len(cu_seqlens) - 1):
+                    start = cu_seqlens[i]
+                    end = cu_seqlens[i + 1]
+                    # Input: [A, B, C, D] -> Labels: [B, C, D, -100]
+                    shift_labels[start:end-1] = input_ids[start+1:end]
+                        
+                # Debug prints
+                # print(f"input_ids slice: {input_ids[:20]}")  # Show first 20 tokens
+                # print(f"shift_labels slice: {shift_labels[:20]}")  # Show first 20 token
+                        
+                # # Debug prints
+                # print(f"input_ids slice: {input_ids[:20]}")  # Show first 20 tokens
+                # print(f"shift_labels slice: {shift_labels[:20]}")  # Show first 20 tokens
+                # print(f"First sequence length: {cu_seqlens[1] - cu_seqlens[0]}")
+                    
+            else:
+                # Padded case: simple shift
+                shift_labels = input_ids[..., 1:].contiguous()
+                logits = logits[..., :-1, :].contiguous()
+
+            # For both cases, we'll use the shifted input_ids as our labels
+            labels = shift_labels
+            
+            # Flatten the tokens
+            loss = self.loss_fn(
+                logits.view(-1, logits.size(-1)),
+                shift_labels.view(-1)
+            )
+
+        if not return_dict:
+            output = (logits,) + output[1:]
+            return ((loss,) + output) if loss is not None else output
+
+        return CausalLMOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=hidden_states,
+            attentions=None,
+        )
+
+    def prepare_inputs_for_generation(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, **model_kwargs):
+        input_shape = input_ids.shape
+        effective_batch_size = input_shape[0]
+
+        #  add a dummy token
+        if self.config.pad_token_id is None:
+            raise ValueError("The PAD token should be defined for generation")
+
+        attention_mask = torch.cat(
+            [attention_mask, attention_mask.new_zeros((attention_mask.shape[0], 1))],
+            dim=-1,
+        )
+        dummy_token = torch.full(
+            (effective_batch_size, 1),
+            self.config.pad_token_id,
+            dtype=torch.long,
+            device=input_ids.device,
+        )
+        input_ids = torch.cat([input_ids, dummy_token], dim=1)
+
+        return {"input_ids": input_ids, "attention_mask": attention_mask}
+
+    def get_number_parameters(self, count_embeddings: bool = True, trainable: bool = True) -> int:
+        """Returns the number of parameters in the model.
+
+        Args:
+            count_embeddings: count the parameters in the embeddings layer, excluding position embeddings.
+            trainable: only count trainable parameters.
+        """
+        params = self.bert.get_number_parameters(count_embeddings, trainable)
+        params += _count_parameters(self.lm_head, trainable)
         return params
 
 
