@@ -1635,7 +1635,7 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
 
         hidden_states = self.bert(
             input_ids,
-            attention_mask=None,
+            attention_mask=None, # let FA do this
             position_ids=position_ids,
             indices=indices,
             cu_seqlens=cu_seqlens,
@@ -1653,26 +1653,24 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
                 shift_labels = torch.full_like(input_ids, -100)
                 shift_labels[:-1] = input_ids[1:]
 
-                # Mask boundaries
+                # Mask boundaries, so eos doesn't predict bos
                 for i in range(len(cu_seqlens) - 1):
                     boundary_pos = cu_seqlens[i+1] - 1
                     shift_labels[boundary_pos] = -100
-                
-                # Mask out PAD tokens
-                mask = (shift_labels == 50283)
-                shift_labels = torch.where(mask, torch.tensor(-100, device=shift_labels.device), shift_labels)
-            
 
-            # print input_ids[(cu_seqlens[2]+1)-5:(cu_seqlens[2]+1)+5]
-            # print shift_labels[(cu_seqlens[2]+1)-5:(cu_seqlens[2]+1)+5]
-            # print input_ids[(cu_seqlens[-2]+1)-5:(cu_seqlens[-2]+1)+5]
-            # print shift_labels[(cu_seqlens[-2]+1)-5:(cu_seqlens[-2]+1)+5]
-            # breakpoint() # pkill -u oweller2 -f wandb
+                # NOTE: no padding or mask in there for now
+                assert 50283 not in shift_labels, f"PAD token found in shift_labels: {shift_labels}"
+                assert 50284 not in shift_labels, f"MASK token found in shift_labels: {shift_labels}"
+                assert shift_labels.shape == logits.shape[:-1] # Verify shapes align
                     
             else:
                 # Padded case: simple shift
                 shift_labels = input_ids[..., 1:].contiguous()
                 logits = logits[..., :-1, :].contiguous()
+                # mask out PAD tokens in the shift_labels
+                mask = (shift_labels == 50283)
+                shift_labels = torch.where(mask, torch.tensor(-100, device=shift_labels.device), shift_labels)
+                assert shift_labels.shape == logits.shape[:-1] # Verify shapes align
 
             # For both cases, we'll use the shifted input_ids as our labels
             labels = shift_labels

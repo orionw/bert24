@@ -349,6 +349,7 @@ def build_no_streaming_dataset(
         split=cfg.dataset.get("split", None),
         max_seq_len=cfg.dataset.max_seq_len,
         pad_sequences=pad_sequences,
+        is_decoder=cfg.dataset.get("suppress_masking", False),
     )
 
 
@@ -387,6 +388,7 @@ def build_text_dataloader(
     mlm_probability = cfg.dataset.get("mlm_probability", None)
     if cfg.dataset.get("suppress_masking", False):
         mlm_probability = 0.0
+        logging.info("Suppressing masking by setting mlm_probability to 0.0")
     # only use sequence packing if using the no_streaming_dataset
     if not cfg.dataset.get("streaming", True) and cfg.get("sequence_packing", False):
         dataloader = DataLoader(
@@ -458,6 +460,7 @@ class NoStreamingDataset(Dataset):
         max_seq_len: int,
         tokenizer: Optional[Tokenizer] = None,
         pad_sequences: bool = True,
+        is_decoder: bool = False
     ) -> None:
         super().__init__()
         if split is not None:
@@ -479,6 +482,8 @@ class NoStreamingDataset(Dataset):
         self.max_seq_len = max_seq_len
         self.tokenizer = tokenizer
         self.pad_sequences = pad_sequences
+        self.is_decoder = is_decoder
+        logging.info(f"self.is_decoder={self.is_decoder}")
 
     def _tokenize(self, text_sample):
         assert self.tokenizer is not None, "Tokenizer required if data is not pretokenized"
@@ -502,13 +507,15 @@ class NoStreamingDataset(Dataset):
                 if isinstance(sample[k], np.ndarray):
                     if sample[k][0] != 50281:
                         sample[k] = np.insert(sample[k], 0, 50281)[: self.max_seq_len]
-                    if sample[k][-1] != 50282:
+                    if sample[k][-1] != 50282 and not self.is_decoder:
+                        # Note: shouldn't force EOS for decoder only but keeping it for encoders
                         sample[k] = sample[k][: self.max_seq_len - 1]
                         sample[k] = np.append(sample[k], 50282)
                     sample[k] = sample[k][: self.max_seq_len]
                     assert 50281 in sample[k], f"Did not find 50281 in {k} of sample {index}"
-                    assert 50282 in sample[k], f"Did not find 50282 in {k} of sample {index}"
                     assert 50283 not in sample[k], f"Found 50283 in {k} of sample {index}"
+                    if not self.is_decoder:
+                        assert 50282 in sample[k], f"Did not find 50282 in {k} of sample {index}"
                 else:
                     del sample[k]
             if "attention_mask" not in sample:

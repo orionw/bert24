@@ -161,18 +161,8 @@ class EfficientHuggingFaceModel(HuggingFaceModel):
         elif isinstance(metric, EfficientCrossEntropy):
             metric_result = metric.update(outputs["loss"])
         else:
-            # print(f"Unsupported metric {metric=}")
-            # print("logits", outputs["logits"].shape)
             labels = outputs.get("labels", self.labels)
             logits = outputs["logits"]
-            # print(labels.shape, logits.shape)
-
-            if len(labels.shape) > 1:  # Unpacked eval tensors are 2D
-                assert False, f"Not implemented for {labels.shape=} which is eval"
-            else:  # Packed training tensors
-                if labels.shape[0] == logits.shape[0] + 1:
-                    labels = labels[1:]
-            
             metric_result = metric.update(logits, labels)
 
         if metric_result is not None:
@@ -605,7 +595,7 @@ def create_flex_bert_gpt(
     else:
         tokenizer = transformers.AutoTokenizer.from_pretrained(pretrained_model_name)
 
-    metrics = [FALanguageCrossEntropy(ignore_index=-100)]
+    metrics = [EfficientCrossEntropy()]
 
     # if recompute_metric_loss or model_config["loss_function"] not in ["fa_cross_entropy", "cross_entropy"]:
     #     if CrossEntropyLoss is not None:
