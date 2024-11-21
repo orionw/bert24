@@ -401,6 +401,7 @@ class GreedyBestFitSequencePacker(SequencePacker):
             if batch_size_warmup_min_size % micro_batch_size != 0:
                 raise ValueError(f"{batch_size_warmup_min_size=} must be a multiple of {micro_batch_size=}")
             batch_size_warmup_min_size = int(batch_size_warmup_min_size / micro_batch_size)
+        
         return cls(
             # input shape
             src_iterable=src_iterable,

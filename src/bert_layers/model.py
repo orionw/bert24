@@ -1658,7 +1658,7 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
                     boundary_pos = cu_seqlens[i+1] - 1
                     shift_labels[boundary_pos] = -100
                 
-                # Mask out both current and shifted PAD tokens
+                # Mask out PAD tokens
                 mask = (shift_labels == 50283)
                 shift_labels = torch.where(mask, torch.tensor(-100, device=shift_labels.device), shift_labels)
             

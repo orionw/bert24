@@ -504,8 +504,9 @@ class NoStreamingDataset(Dataset):
                         sample[k] = np.insert(sample[k], 0, 50281)[: self.max_seq_len]
                     if 50282 not in sample[k]:
                         assert 50283 not in sample[k] # can't have padding before eos
-                        # add at the end
+                        sample[k] = sample[k][: self.max_seq_len - 1] # leave space for eos
                         sample[k] = np.append(sample[k], 50282)
+
                     assert 50282 in sample[k] 
                     assert 50281 in sample[k]
                     sample[k] = sample[k][: self.max_seq_len]
