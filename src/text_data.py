@@ -507,15 +507,16 @@ class NoStreamingDataset(Dataset):
                 if isinstance(sample[k], np.ndarray):
                     if sample[k][0] != 50281:
                         sample[k] = np.insert(sample[k], 0, 50281)[: self.max_seq_len]
+                    sample[k] = sample[k][: self.max_seq_len] # if it was too long and had EOS, it would skip it here
                     if sample[k][-1] != 50282 and not self.is_decoder:
                         # Note: shouldn't force EOS for decoder only but keeping it for encoders
                         sample[k] = sample[k][: self.max_seq_len - 1]
                         sample[k] = np.append(sample[k], 50282)
                     sample[k] = sample[k][: self.max_seq_len]
-                    assert 50281 in sample[k], f"Did not find 50281 in {k} of sample {index}"
-                    assert 50283 not in sample[k], f"Found 50283 in {k} of sample {index}"
+                    assert 50281 in sample[k], f"Did not find 50281 in {k} of sample {index}: {sample[k]}"
+                    assert 50283 not in sample[k], f"Found 50283 in {k} of sample {index}: {sample[k]}"
                     if not self.is_decoder:
-                        assert 50282 in sample[k], f"Did not find 50282 in {k} of sample {index}"
+                        assert 50282 in sample[k], f"Did not find 50282 in {k} of sample {index}: {sample[k]}"
                 else:
                     del sample[k]
             if "attention_mask" not in sample:
