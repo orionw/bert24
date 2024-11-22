@@ -1625,7 +1625,6 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
         #
         # Prediction scores are only computed for masked tokens and the (bs,
         # seqlen) dimensions are flattened
-
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         if self.unpad_embeddings and (indices is None and cu_seqlens is None and max_seqlen is None):
             batch_size, seq_len = input_ids.shape[:2]
@@ -1650,36 +1649,33 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
         loss = None
         if labels is not None:
             if cu_seqlens is not None:                
-                shift_labels = torch.full_like(input_ids, -100)
-                shift_labels[:-1] = input_ids[1:]
+                shift_labels = input_ids[1:].clone()    
+                loss_logits = logits[:-1]  # Only shift for loss
 
                 # Mask boundaries, so eos doesn't predict bos
                 for i in range(len(cu_seqlens) - 1):
                     boundary_pos = cu_seqlens[i+1] - 1
-                    shift_labels[boundary_pos] = -100
+                    if boundary_pos < len(shift_labels):
+                        shift_labels[boundary_pos] = -100
 
                 # NOTE: no padding or mask in there for now
                 assert 50283 not in shift_labels, f"PAD token found in shift_labels: {shift_labels}"
                 assert 50284 not in shift_labels, f"MASK token found in shift_labels: {shift_labels}"
-                assert shift_labels.shape == logits.shape[:-1] # Verify shapes align
-                    
+                assert shift_labels.shape[0] == loss_logits.shape[0] # Verify shapes align                    
             else:
                 # Padded case: simple shift
                 shift_labels = input_ids[..., 1:].contiguous()
-                logits = logits[..., :-1, :].contiguous()
+                loss_logits = logits[..., :-1, :].contiguous()
                 # mask out PAD tokens in the shift_labels
                 mask = (shift_labels == 50283)
                 shift_labels = torch.where(mask, torch.tensor(-100, device=shift_labels.device), shift_labels)
-                assert shift_labels.shape == logits.shape[:-1] # Verify shapes align
+                assert shift_labels.shape[0] == loss_logits.shape[0] # Verify shapes align
 
             # For both cases, we'll use the shifted input_ids as our labels
             labels = shift_labels
             
             # Flatten the tokens
-            loss = self.loss_fn(
-                logits.view(-1, logits.size(-1)),
-                shift_labels.view(-1)
-            )
+            loss = self.loss_fn(loss_logits.view(-1, loss_logits.size(-1)), shift_labels.view(-1))
 
         if self.pad_logits:
             return CausalLMOutput(
