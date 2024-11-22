@@ -12,12 +12,14 @@ def parse_args():
         description='Convert Composer checkpoint to HuggingFace format'
     )
     parser.add_argument(
+        '-c',
         '--checkpoint_path',
         type=str,
         required=True,
         help='Path to the Composer checkpoint file'
     )
     parser.add_argument(
+        '-o',
         '--output_dir',
         type=str,
         default='./hf-save-pretrained-output',
