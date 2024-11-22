@@ -931,6 +931,7 @@ class FlexBertModel(FlexBertPreTrainedModel):
         else:
             self.final_norm = None
         self.unpad_embeddings = config.unpad_embeddings
+        self.is_decoder = False
 
     def post_init(self):
         self._init_weights(reset_params=False)
@@ -952,7 +953,7 @@ class FlexBertModel(FlexBertPreTrainedModel):
         max_seqlen: Optional[int] = None,
         **kwargs,
     ) -> Tuple[Union[List[torch.Tensor], torch.Tensor], Optional[torch.Tensor]]:
-        if attention_mask is None:
+        if attention_mask is None and not self.is_decoder:
             attention_mask = torch.ones_like(input_ids)
 
         embedding_output = self.embeddings(input_ids, position_ids)
@@ -1509,6 +1510,7 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
     def __init__(self, config: FlexBertConfig):
         super().__init__(config)
         self.bert = FlexBertModel(config)
+        self.bert.is_decoder = True
         self.lm_head = FlexBertPredictionHead(config)
 
         if config.tie_word_embeddings:
@@ -1524,7 +1526,7 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
         self.unpad_embeddings = config.unpad_embeddings
         self.pad_logits = config.pad_logits
         self.compile_model = config.compile_model
-        # self.masked_prediction = config.masked_prediction
+        self.masked_prediction = config.masked_prediction
 
         # Initialize weights and apply final processing
         self._init_weights(reset_params=False)
@@ -1692,27 +1694,25 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
                 attentions=None,
             )
 
-    def prepare_inputs_for_generation(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, **model_kwargs):
-        input_shape = input_ids.shape
-        effective_batch_size = input_shape[0]
+    def prepare_inputs_for_generation(
+        self,
+        input_ids: torch.Tensor,
+        past_key_values: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        **kwargs
+    ) -> dict:
+            # only last token for inputs if past is defined
+            if past_key_values is not None:
+                input_ids = input_ids[:, -1].unsqueeze(-1)
+                if attention_mask is not None:
+                    attention_mask = attention_mask[:, -1:]
 
-        #  add a dummy token
-        if self.config.pad_token_id is None:
-            raise ValueError("The PAD token should be defined for generation")
-
-        attention_mask = torch.cat(
-            [attention_mask, attention_mask.new_zeros((attention_mask.shape[0], 1))],
-            dim=-1,
-        )
-        dummy_token = torch.full(
-            (effective_batch_size, 1),
-            self.config.pad_token_id,
-            dtype=torch.long,
-            device=input_ids.device,
-        )
-        input_ids = torch.cat([input_ids, dummy_token], dim=1)
-
-        return {"input_ids": input_ids, "attention_mask": attention_mask}
+            return {
+                "input_ids": input_ids,
+                "past_key_values": past_key_values,
+                "use_cache": kwargs.get("use_cache", True),
+                "attention_mask": attention_mask,
+            }
 
     def get_number_parameters(self, count_embeddings: bool = True, trainable: bool = True) -> int:
         """Returns the number of parameters in the model.
