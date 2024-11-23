@@ -1630,6 +1630,9 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         if self.unpad_embeddings and (indices is None and cu_seqlens is None and max_seqlen is None):
             batch_size, seq_len = input_ids.shape[:2]
+            if attention_mask is None:
+                # create all ones, except for padding (TODO?)
+                attention_mask = torch.ones_like(input_ids)
             input_ids, indices, cu_seqlens, max_seqlen, position_ids, labels = self.unpad_inputs(
                 input_ids, attention_mask, position_ids, labels
             )
@@ -1697,22 +1700,16 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
     def prepare_inputs_for_generation(
         self,
         input_ids: torch.Tensor,
-        past_key_values: Optional[torch.FloatTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         **kwargs
     ) -> dict:
-            # only last token for inputs if past is defined
-            if past_key_values is not None:
-                input_ids = input_ids[:, -1].unsqueeze(-1)
-                if attention_mask is not None:
-                    attention_mask = attention_mask[:, -1:]
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
 
-            return {
-                "input_ids": input_ids,
-                "past_key_values": past_key_values,
-                "use_cache": kwargs.get("use_cache", True),
-                "attention_mask": attention_mask,
-            }
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
 
     def get_number_parameters(self, count_embeddings: bool = True, trainable: bool = True) -> int:
         """Returns the number of parameters in the model.
