@@ -36,7 +36,7 @@ import src.flex_bert as flex_bert_module
 import src.hf_bert as hf_bert_module
 import src.mosaic_bert as mosaic_bert_module
 import src.text_data as text_data_module
-from src.callbacks.dataloader_speed import DataloaderSpeedMonitor
+from src.callbacks.dataloader_speed import DataloaderSpeedMonitor, BatchSaverCallback, StepFolderCallback
 from src.callbacks.log_grad_norm import LogGradNorm
 from src.callbacks.packing_efficiency import PackingEfficency
 from src.callbacks.scheduled_gc import ScheduledGarbageCollector
@@ -154,6 +154,10 @@ def build_callback(name, kwargs):
         return DataloaderSpeedMonitor()
     elif name == "packing_efficiency":
         return PackingEfficency(log_interval=kwargs.get("log_interval", 10))
+    elif name == "batch_saver":
+        return BatchSaverCallback(steps_per_file=kwargs.get("steps_per_file", 10))
+    elif name == "step_folder":
+        return StepFolderCallback(data_save_folder=kwargs.get("data_save_folder", "data_order"), folder_format=kwargs.get("model", "step_{step:06d}"))
     else:
         raise ValueError(f"Not sure how to build callback: {name}")
 
@@ -310,6 +314,16 @@ def build_model(cfg: DictConfig):
         )
     elif cfg.name == "flex_gpt":
         return flex_bert_module.create_flex_bert_gpt(
+            pretrained_model_name=cfg.pretrained_model_name,
+            pretrained_checkpoint=cfg.get("pretrained_checkpoint", None),
+            model_config=cfg.get("model_config", None),
+            tokenizer_name=cfg.get("tokenizer_name", None),
+            gradient_checkpointing=cfg.get("gradient_checkpointing", None),
+            recompute_metric_loss=cfg.get("recompute_metric_loss", False),
+            disable_train_metrics=cfg.get("disable_train_metrics", False),
+        )
+    elif cfg.name == "flex_noop":
+        return flex_bert_module.create_flex_noop(
             pretrained_model_name=cfg.pretrained_model_name,
             pretrained_checkpoint=cfg.get("pretrained_checkpoint", None),
             model_config=cfg.get("model_config", None),

@@ -21,3 +21,5 @@ class PackingEfficency(Callback):
 
     def _packing_efficiency(self, state: State) -> float:
         return state.batch["attention_mask"].sum().item() / state.batch["attention_mask"].numel()
+
+

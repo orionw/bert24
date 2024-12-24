@@ -1723,6 +1723,112 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
         return params
 
 
+class FlexBertForNoOp(FlexBertPreTrainedModel):
+    """Bert Model transformer with a LM head.
+
+    This head is just a standard LM head module. Used for causal language modeling tasks.
+    """
+
+    def __init__(self, config: FlexBertConfig):
+        super().__init__(config)
+        self.dummy = nn.Linear(1, 1)
+        self.criterion = nn.MSELoss()
+        self.target = None
+
+        self.loss_fn = nn.CrossEntropyLoss() if not hasattr(config, "loss_function") else get_loss_fn(config)
+        self.fa_ce = getattr(config, "loss_function", "cross_entropy") == "fa_cross_entropy"
+        self.return_z_loss = config.loss_kwargs.get("return_z_loss", False)
+        self.unpad_embeddings = config.unpad_embeddings
+        self.pad_logits = config.pad_logits
+        self.compile_model = config.compile_model
+        self.masked_prediction = config.masked_prediction
+
+        # Initialize weights and apply final processing
+        self._init_weights(reset_params=False)
+
+    def _init_weights(self, module: Optional[nn.Module] = None, reset_params: Optional[bool] = None):
+        assert (module is None) != (reset_params is None), "arg module xor reset_params must be specified"
+        if module:
+            self._init_module_weights(module)
+        else:
+            assert isinstance(reset_params, bool)
+
+    @classmethod
+    def from_composer(
+        cls,
+        pretrained_checkpoint,
+        state_dict=None,
+        cache_dir=None,
+        from_tf=False,
+        config=None,
+        *inputs,
+        **kwargs,
+    ):
+        """Load from pre-trained."""
+        model = cls(config, *inputs, **kwargs)
+        if from_tf:
+            raise ValueError("Mosaic BERT does not support loading TensorFlow weights.")
+
+        state_dict = torch.load(pretrained_checkpoint)
+        # If the state_dict was saved after wrapping with `composer.HuggingFaceModel`, it takes on the `model` prefix
+        consume_prefix_in_state_dict_if_present(state_dict, prefix="model.")
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+
+        if len(missing_keys) > 0:
+            logger.warning(f"Found these missing keys in the checkpoint: {', '.join(missing_keys)}")
+        if len(unexpected_keys) > 0:
+            logger.warning(f"Found these unexpected keys in the checkpoint: {', '.join(unexpected_keys)}")
+
+        return model
+
+    def forward(
+        self,
+        input_ids: Optional[torch.Tensor],
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        return_dict: Optional[bool] = None,
+        indices: Optional[torch.Tensor] = None,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        seq_len: Optional[int] = None,
+        **kwargs,
+    ) -> Union[Tuple[torch.Tensor], CausalLMOutput]:
+        if self.target is None:
+            self.target = torch.tensor([1.0], device=input_ids.device)
+        loss = self.criterion(self.dummy(torch.sum(input_ids, dim=(-1,-2), dtype=torch.float32).view(1)), self.target)
+        return CausalLMOutput(
+            loss=loss,
+            logits=None,
+            hidden_states=None,
+            attentions=None,
+        )
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        **kwargs
+    ) -> dict:
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
+    def get_number_parameters(self, count_embeddings: bool = True, trainable: bool = True) -> int:
+        """Returns the number of parameters in the model.
+
+        Args:
+            count_embeddings: count the parameters in the embeddings layer, excluding position embeddings.
+            trainable: only count trainable parameters.
+        """
+        return 0
+
+
 def init_model_from_pretrained(
     pretrained_model: FlexBertModel,
     new_model: FlexBertModel,
