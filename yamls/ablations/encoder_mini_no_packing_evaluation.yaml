@@ -1,0 +1,99 @@
+parallel: false
+base_run_name: encoder_mini_no_packing-encoder_mini_no_packing
+default_seed: 19
+precision: amp_bf16
+tokenizer_name: bclavie/olmo_bert_template
+model:
+  name: flex_bert
+  use_pretrained: true
+  pretrained_model_name: bert-base-uncased
+  tokenizer_name: ${tokenizer_name}
+  model_config:
+    vocab_size: 50368
+    init_method: full_megatron
+    num_hidden_layers: 19
+    hidden_size: 512
+    intermediate_size: 768
+    num_attention_heads: 8
+    attention_layer: rope
+    attention_probs_dropout_prob: 0.0
+    attn_out_bias: false
+    attn_out_dropout_prob: 0.1
+    attn_qkv_bias: false
+    bert_layer: prenorm
+    embed_dropout_prob: 0.0
+    embed_norm: true
+    final_norm: true
+    skip_first_prenorm: true
+    embedding_layer: sans_pos
+    loss_function: fa_cross_entropy
+    loss_kwargs:
+      reduction: mean
+    mlp_dropout_prob: 0.0
+    mlp_in_bias: false
+    mlp_layer: glu
+    mlp_out_bias: false
+    normalization: layernorm
+    norm_kwargs:
+      bias: false
+      eps: 1e-5
+    hidden_act: gelu
+    head_pred_act: gelu
+    activation_function: gelu
+    padding: unpadded
+    rotary_emb_dim: null
+    rotary_emb_base: 10000.0
+    rotary_emb_scale_base: null
+    rotary_emb_interleaved: false
+    allow_embedding_resizing: true
+    sliding_window: 128
+    global_attn_every_n_layers: 3
+    unpad_embeddings: true
+    compile_model: true
+    masked_prediction: true
+    use_fa2: true
+    deterministic_fa2: true
+    head_class_act: gelu
+starting_checkpoint_load_path: latest-rank0.pt
+local_pretrain_checkpoint_folder: /home/oweller2/my_scratch/retrieval_pretraining/bert24/models_pythia_like/encoder_mini_no_packing
+save_finetune_checkpoint_prefix: ./finetuned-checkpoints
+save_finetune_checkpoint_folder: ${save_finetune_checkpoint_prefix}/${base_run_name}
+callbacks:
+  lr_monitor: {}
+  speed_monitor: {}
+scheduler:
+  name: linear_decay_with_warmup
+  t_warmup: 0.1dur
+  alpha_f: 0.0
+tasks:
+  mlmmlu_rookie_reserve:
+    seeds:
+    - 1618
+    - 42
+    - 6033
+    trainer_kwargs:
+      save_num_checkpoints_to_keep: 0
+  mnli:
+    seeds:
+    - 1618
+    - 42
+    - 6033
+    trainer_kwargs:
+      max_duration: 2ep
+      save_num_checkpoints_to_keep: 1
+  boolq:
+    seeds:
+    - 1618
+    - 42
+    - 6033
+    trainer_kwargs:
+      max_duration: 4ep
+      save_num_checkpoints_to_keep: 0
+  wic:
+    seeds:
+    - 1618
+    - 42
+    - 6033
+    trainer_kwargs:
+      max_duration: 2ep
+      save_num_checkpoints_to_keep: 0

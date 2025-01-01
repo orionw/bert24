@@ -1686,7 +1686,7 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
             return CausalLMOutput(
                 loss=loss,
                 logits=self.pad_inputs(logits, indices, batch_size, seq_len)[0],
-                hidden_states=None,
+                hidden_states=hidden_states,
                 attentions=None,
             )
         else:

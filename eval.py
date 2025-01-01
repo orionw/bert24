@@ -1,3 +1,6 @@
+# Copyright 2024 **AUTHORS_TODO**
+# License: Apache-2.0
+
 # Copyright 2022 MosaicML Examples authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,14 +9,17 @@ import gc
 import multiprocessing as mp
 import os
 import sys
+import re
 import time
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor as Pool
 from multiprocessing.managers import DictProxy, SyncManager
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from urllib.parse import urlparse
-import json
-from datetime import datetime
+from composer.optim import DecoupledAdamW
+from torch.optim import AdamW
+
+from main import param_groups_weight_decay
 
 # Add folder root to path to allow us to use relative imports regardless of what directory the script is run from
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
@@ -71,73 +77,6 @@ TASK_NAME_TO_CLASS = {
 GLUE_TASKS = {"mnli", "rte", "mrpc", "qnli", "qqp", "sst2", "stsb", "cola"}
 SUPERGLUE_TASKS = {"boolq", "cb", "copa", "multirc", "rte", "wic"}
 
-def save_results(config, all_results, round_1_results, round_2_results, glue_results, results_mean, 
-                overall_glue, overall_superglue, overall_other):
-    """Save all results to a JSON file with comprehensive information."""
-    
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_path = os.path.join(config.save_finetune_checkpoint_folder, f"results_{timestamp}.json")
-    
-    # Prepare the results dictionary
-    results_dict = {
-        "timestamp": timestamp,
-        "all_results": {},  # We'll convert the complex parts to serializable format
-        "round_1_results": {},
-        "round_2_results": {},
-        "glue_task_results": {
-            "raw": dict(glue_results),
-            "means": dict(results_mean)
-        },
-        "summary": {
-            "glue_average": float(np.mean(overall_glue)) if overall_glue else None,
-            "superglue_average": float(np.mean(overall_superglue)) if overall_superglue else None,
-            "other_average": float(np.mean(overall_other)) if overall_other else None
-        },
-        "config": om.OmegaConf.to_container(config, resolve=True)
-    }
-    
-    # Convert the complex results to serializable format
-    for job_name, result_dict in all_results.items():
-        results_dict["all_results"][job_name] = {
-            "metrics": result_dict["result"]["metrics"],
-            "checkpoints": result_dict["result"]["checkpoints"],
-            "config": om.OmegaConf.to_container(result_dict["config"], resolve=True)
-        }
-    
-    for job_name, result_dict in round_1_results.items():
-        results_dict["round_1_results"][job_name] = {
-            "metrics": result_dict["result"]["metrics"],
-            "checkpoints": result_dict["result"]["checkpoints"]
-        }
-        
-    for job_name, result_dict in round_2_results.items():
-        results_dict["round_2_results"][job_name] = {
-            "metrics": result_dict["result"]["metrics"],
-            "checkpoints": result_dict["result"]["checkpoints"]
-        }
-    
-    # Ensure the directory exists
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    
-    # Save to file
-    with open(save_path, 'w') as f:
-        json.dump(results_dict, f, indent=2, default=str)
-    
-    print(f"\nResults saved to: {save_path}")
-    
-    # Also save a summary file with just the key metrics
-    summary_path = os.path.join(config.save_finetune_checkpoint_folder, f"summary_{timestamp}.json")
-    summary_dict = {
-        "timestamp": timestamp,
-        "task_means": dict(results_mean),
-        "overall_averages": results_dict["summary"]
-    }
-    
-    with open(summary_path, 'w') as f:
-        json.dump(summary_dict, f, indent=2)
-    
-    print(f"Summary saved to: {summary_path}\n")
-
 
 def build_algorithm(name, kwargs):
     if name == "gradient_clipping":
@@ -188,6 +127,58 @@ def build_scheduler(cfg):
         return WarmupStableDecayScheduler(t_warmup=cfg.t_warmup, alpha_f=cfg.alpha_f)
     else:
         raise ValueError(f"Not sure how to build scheduler: {cfg.name}")
+
+
+def build_optimizer(cfg, model):
+    if cfg is None:
+        return None
+
+    if cfg.get("filter_bias_norm_wd", False):
+        params = param_groups_weight_decay(model, weight_decay=cfg.weight_decay)
+    else:
+        params = model.parameters()
+
+    if cfg.name == "decoupled_adamw":
+        return DecoupledAdamW(params, lr=cfg.lr, betas=list(cfg.betas), eps=cfg.eps, weight_decay=cfg.weight_decay)
+    elif cfg.name == "adamw":
+        print(
+            "INFO: You might want to increase the weight decay because in AdamW it is scaled by the lr."
+            f" Default weight decay is ``1e-2`` -> {cfg.weight_decay}. Default lr is `lr=1e-3` -> {cfg.lr}."
+        )
+        return AdamW(params, lr=cfg.lr, betas=list(cfg.betas), eps=cfg.eps, weight_decay=cfg.weight_decay)
+    elif cfg.name == "stableadamw":
+        try:
+            if cfg.get("log_grad_norm", False):
+                from src.optimizer import StableAdamW
+            else:
+                from optimi import StableAdamW
+        except ImportError:
+            raise ImportError("Install `pip install torch-optimi` to use the StableAdamW optimizer.")
+
+        print(
+            "INFO: You might want to increase the weight decay because in StableAdamW it is scaled by the lr."
+            f" Default weight decay is ``1e-2`` -> {cfg.weight_decay}. Default lr is `lr=1e-3` -> {cfg.lr}."
+        )
+        return StableAdamW(params, lr=cfg.lr, betas=list(cfg.betas), eps=cfg.eps, weight_decay=cfg.weight_decay)
+    elif cfg.name == "decoupled_stableadamw":
+        try:
+            if cfg.get("log_grad_norm", False):
+                from src.optimizer import StableAdamW
+            else:
+                from optimi import StableAdamW
+        except ImportError:
+            raise ImportError("Install `pip install torch-optimi` to use the StableAdamW optimizer.")
+
+        return StableAdamW(
+            params,
+            lr=cfg.lr,
+            betas=list(cfg.betas),
+            eps=cfg.eps,
+            weight_decay=cfg.weight_decay,
+            decouple_lr=True,
+        )
+    else:
+        raise ValueError(f"Not sure how to build optimizer: {cfg.name}")
 
 
 def build_model(cfg: DictConfig, num_labels: int, multiple_choice: bool = False, **kwargs):
@@ -323,6 +314,7 @@ def create_job_configs(
                     "model": model_kwargs,
                     "tokenizer_name": main_config.tokenizer_name,
                     "scheduler": main_config.scheduler,
+                    "optimizer": task_config.get("optimizer", main_config.get("optimizer", None)),
                     "load_path": pretrained_checkpoint_path,
                     "save_folder": os.path.join(
                         main_config.save_finetune_checkpoint_folder,
@@ -351,17 +343,21 @@ def run_job_worker(
     reproducibility.configure_deterministic_mode()
     reproducibility.seed_all(config.seed)
     task_cls = TASK_NAME_TO_CLASS[config.task]
+
+    model = build_model(
+        config.model,
+        num_labels=task_cls.num_labels,
+        multiple_choice=task_cls.multiple_choice,
+        custom_eval_metrics=task_cls.custom_eval_metrics,
+    )
+
     instantiated_job = task_cls(
         job_name=config.job_name,
         seed=config.seed,
-        model=build_model(
-            config.model,
-            num_labels=task_cls.num_labels,
-            multiple_choice=task_cls.multiple_choice,
-            custom_eval_metrics=task_cls.custom_eval_metrics,
-        ),
+        model=model,
         tokenizer_name=config.tokenizer_name,
         scheduler=build_scheduler(config.scheduler),
+        optimizer=build_optimizer(config.optimizer, model),
         load_path=config.load_path,
         save_folder=config.save_folder,
         loggers=[build_logger(name, logger_config) for name, logger_config in config.get("loggers", {}).items()],
@@ -374,9 +370,21 @@ def run_job_worker(
         precision=config.precision,
         **config.trainer_kwargs,
     )
-    results = instantiated_job.run(gpu_queue, process_to_gpu)
+    results = instantiated_job.run(gpu_queue, process_to_gpu, config)
 
-    # delete the job so that the optimizer and anything else on the gpu gets deleted
+    # Extract W&B run ID from the logger
+    results["wandb_name"] = None
+    results["wandb_project"] = None
+    results["wandb_entity"] = None
+
+    if results["loggers"] is None:
+        results["loggers"] = []
+    for logger in results["loggers"]:
+        if isinstance(logger, WandBLogger):
+            results["wandb_run_url"] = logger.run_url
+            break
+
+    # Clean up: delete the job so that the optimizer and anything else on the gpu gets deleted
     del instantiated_job
     torch.cuda.empty_cache()
     gc.collect()
@@ -396,6 +404,8 @@ def run_jobs_parallel(configs: Sequence[om.DictConfig]) -> Dict[str, Any]:
     * 'job_name': The job name, helpful for keeping track of results during multiprocessing
     """
     num_gpus = torch.cuda.device_count()
+    mp.set_start_method("spawn", force=True)
+    torch.multiprocessing.set_start_method("spawn", force=True)
     results = []
 
     with mp.Manager() as manager:
@@ -493,13 +503,19 @@ def train(config: om.DictConfig) -> None:
     Args:
         config (DictConfig): Configuration composed by OmegaConf
     """
+    # these subtasks require the parent task to have been run
+    round_2_task_names = config.get(
+        "round_2_task_names",
+        {
+            "mnli": {"rte", "mrpc", "stsb"},
+            "swag": {"copa"},
+        },
+    )
+
     start_time = time.time()
 
     # Initial default seed
-    if "seed" in config:
-        reproducibility.seed_all(config.seed)
-    else:
-        reproducibility.seed_all(config.default_seed)
+    reproducibility.seed_all(config.default_seed)
 
     # Quiet down WandB
     os.environ["WANDB_SILENT"] = "true"
@@ -508,10 +524,10 @@ def train(config: om.DictConfig) -> None:
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
     # Confirm GPUs if parallel=True
-    # if config.parallel:
-    #     assert (
-    #         torch.cuda.device_count() > 0
-    #     ), "Can only use parallel mode if GPUs are available. Please set parallel=False."
+    if config.parallel:
+        assert (
+            torch.cuda.device_count() > 0
+        ), "Can only use parallel mode if GPUs are available. Please set parallel=False."
 
     # Downloads the starting checkpoint ahead of time so that
     # the different tasks don't all try to download it at the same time
@@ -523,20 +539,21 @@ def train(config: om.DictConfig) -> None:
     else:
         local_pretrain_checkpoint_path = None
 
-    # Builds round 1 configs and runs them
-    # round_1_task_names = {"mnli", "eurlex", "ultrafeedback", "mlmmlu_amateur", "mlmmlu_semipro", "mlmmlu_reserve", "mlmmlu_rookie"}
-    round_1_task_names = {"mnli",  "mlmmlu_rookie_reserve"} # "eurlex", "ultrafeedback",
+    # Builds round 1 configs and runs them by first filtering out all round 2 tasks
+    if round_2_task_names:
+        round_2_tasks = [task for tasks in round_2_task_names.values() for task in tasks]
+    else:
+        round_2_tasks = []
+    round_1_task_names = [task for task in TASK_NAME_TO_CLASS.keys() if task not in round_2_tasks]
 
     round_1_job_configs = create_job_configs(config, round_1_task_names, local_pretrain_checkpoint_path)
-    os.makedirs(config.save_finetune_checkpoint_folder, exist_ok=True)
 
     round_1_results = {}
     if len(round_1_job_configs) > 0:
-        # if config.parallel:
-        #     round_1_results = run_jobs_parallel(round_1_job_configs)
-        # else:
-        time.sleep(10)
-        round_1_results = run_jobs_serial(round_1_job_configs)
+        if config.parallel:
+            round_1_results = run_jobs_parallel(round_1_job_configs)
+        else:
+            round_1_results = run_jobs_serial(round_1_job_configs)
 
     # Builds up the information needed to run the second round, starting from the MNLI checkpoints
     checkpoint_paths = {}
@@ -553,9 +570,6 @@ def train(config: om.DictConfig) -> None:
         checkpoint_paths[task_name] = job_results["checkpoints"][-1]
 
     # Builds round 2 configs and runs them
-    round_2_task_names = {
-        "mnli": {"boolq", "wic"},
-    }
     round_2_job_configs = []
     for dependent_task_name in round_2_task_names:
         starting_checkpoint_path = (
@@ -573,11 +587,10 @@ def train(config: om.DictConfig) -> None:
 
     round_2_results = {}
     if len(round_2_job_configs) > 0:
-        # if config.:
-        #     round_2_results = run_jobs_parallel(round_2_job_configs)
-        # else:
-        time.sleep(10)
-        round_2_results = run_jobs_serial(round_2_job_configs)
+        if config.parallel:
+            round_2_results = run_jobs_parallel(round_2_job_configs)
+        else:
+            round_2_results = run_jobs_serial(round_2_job_configs)
 
     end_time = time.time()
 
@@ -591,25 +604,53 @@ def train(config: om.DictConfig) -> None:
     all_results.update(round_2_results)
     _print_table(all_results)
 
-    # Calculate GLUE results across seeds
-    glue_results: Dict[str, List[float]] = defaultdict(list)
-    for job_name, result in all_results.items():
+    # Average the GLUE results across seeds and pretty print them
+    task_metrics: Dict[str, List[float]] = defaultdict(list)
+    task_to_run_infos: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+
+    for job_name, output_dict in all_results.items():
+        result = output_dict["result"]
         job_values = get_values_from_path(job_name, separator="_")
-        for _, eval_results in result["result"]["metrics"].items():
+        task_name = job_values["task"]
+
+        # Collect W&B run information per task
+        run_url = result.get("wandb_run_url")
+        if run_url:
+            task_to_run_infos[task_name].append({"job_name": job_name, "run_url": run_url})
+
+        # Collect metrics per task
+        for _, eval_results in result["metrics"].items():
             for _, metric in eval_results.items():
-                glue_results[job_values["task"]].append(metric * 100)
-    results_mean: Dict[str, float] = {key: float(np.mean(values)) for key, values in glue_results.items()}
+                task_metrics[task_name].append(metric * 100)
+
+    # Compute average metrics per task
+    results_mean: Dict[str, float] = {task_name: float(np.mean(values)) for task_name, values in task_metrics.items()}
 
     overall_glue = []
     overall_superglue = []
     overall_other = []
+
     for task_name, average_metric in results_mean.items():
+        # Classify tasks into GLUE, SuperGLUE, or other
         if task_name in GLUE_TASKS:
             overall_glue.append(average_metric)
-        if task_name in SUPERGLUE_TASKS:
+        elif task_name in SUPERGLUE_TASKS:
             overall_superglue.append(average_metric)
-        if task_name not in GLUE_TASKS.union(SUPERGLUE_TASKS):
+        else:
             overall_other.append(average_metric)
+
+        # Update W&B runs with average metrics
+        for run_info in task_to_run_infos.get(task_name, []):
+            match = re.search(r"([^/]+)/([^/]+)/runs/([^/]+)", run_info["run_url"])
+            if match:
+                import wandb
+
+                api = wandb.Api()
+                run = api.run(f"{match.group(1)}/{match.group(2)}/{match.group(3)}")
+
+                # Update the run's summary with the average metric
+                run.summary[f"average_{task_name}"] = average_metric
+                run.update()
 
     if len(overall_other) > 0:
         other_results_mean = {k: v for k, v in results_mean.items() if k not in GLUE_TASKS.union(SUPERGLUE_TASKS)}
@@ -628,19 +669,6 @@ def train(config: om.DictConfig) -> None:
             "superglue": float(np.mean(overall_superglue)),
         }
         _print_averaged_glue_results([(key, value) for key, value in superglue_results_mean.items()])
-
-    # Save all results using our comprehensive save function
-    save_results(
-        config=config,
-        all_results=all_results,
-        round_1_results=round_1_results,
-        round_2_results=round_2_results,
-        glue_results=glue_results,
-        results_mean=results_mean,
-        overall_glue=overall_glue,
-        overall_superglue=overall_superglue,
-        overall_other=overall_other
-    )
 
 
 if __name__ == "__main__":

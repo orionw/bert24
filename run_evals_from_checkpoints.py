@@ -117,7 +117,7 @@ def launch_job(gpu_id: int, config_path: Path, quiet: bool = False):
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     stdout = subprocess.DEVNULL if quiet else None
-    process = subprocess.Popen(["python", "ablation_eval.py", config_path], env=env, stdout=stdout, stderr=stdout)
+    process = subprocess.Popen(["python", "./bert24/ablation_eval.py", config_path], env=env, stdout=stdout, stderr=stdout)
     gpus_in_use[gpu_id] = process
     all_processes.append(process)  # Add the process to the global list
     return process
@@ -134,7 +134,7 @@ def run_single_job(config_path: Path, quiet: bool = False):
     """Run a single job without GPU management."""
     print(f"Running job for {config_path}")
     stdout = subprocess.DEVNULL if quiet else None
-    process = subprocess.Popen(["python", "ablation_eval.py", config_path], stdout=stdout, stderr=stdout)
+    process = subprocess.Popen(["python", "./bert24/ablation_eval.py", config_path], stdout=stdout, stderr=stdout)
     all_processes.append(process)  # Add the process to the global list
     process.wait()
 
@@ -304,16 +304,18 @@ def generate_eval_configs(
     seeds: List[int],
     parallel: bool,
 ):
+    print(f"Generating evaluation configs for {checkpoints}")
     """Generate evaluation configs for each checkpoint."""
     for folder in checkpoints.glob("*"):
-        if folder.is_dir():
+        if folder.is_file():
+            checkpoint_details = folder.name.split("/")[-1].replace("-rank0.pt", "")
             cmd = [
                 "python",
-                "generate_eval_config_from_checkpoint.py",
+                "bert24/generate_eval_config_from_checkpoint.py",
                 "--checkpoint",
                 folder,
                 "--output-dir",
-                str(checkpoints),
+                str(checkpoints) + "/" + checkpoint_details,
             ]
 
             # Add optional arguments if they're provided
@@ -368,6 +370,8 @@ def generate_eval_configs(
 
             time.sleep(2)
 
+            # make a symlink in the new dir to the checkpoint
+            os.symlink(folder, str(checkpoints) + "/" + checkpoint_details + f"/{checkpoint_details}-rank0.pt")
 
 def download_dataset(dataset_name: str, subset: Optional[str] = None):
     try:
@@ -384,20 +388,20 @@ def download_datasets(
 
     if not skip_semipro:
         required_datasets.append(["answerdotai/MLMMLU", "Amateur"])
-        required_datasets.append(["answerdotai/MLMMLU", "Semipro"])
-    if not skip_reserve:
-        required_datasets.append(["answerdotai/MLMMLU", "Rookie"])
-        required_datasets.append(["answerdotai/MLMMLU", "Reserve"])
-    if not skip_eurlex:
-        required_datasets.append(["coastalcph/lex_glue", "eurlex"])
+        # required_datasets.append(["answerdotai/MLMMLU", "Semipro"])
+    # if not skip_reserve:
+    #     required_datasets.append(["answerdotai/MLMMLU", "Rookie"])
+    #     required_datasets.append(["answerdotai/MLMMLU", "Reserve"])
+    # if not skip_eurlex:
+    #     required_datasets.append(["coastalcph/lex_glue", "eurlex"])
     if not skip_mnli:
         required_datasets.append(["glue", "mnli"])
     if not skip_boolq:
         required_datasets.append(["aps/super_glue", "boolq"])
     if not skip_wic:
         required_datasets.append(["aps/super_glue", "wic"])
-    if not skip_ultrafeedback:
-        required_datasets.append(["rbiswasfc/ultrafeedback-binary-classification"])
+    # if not skip_ultrafeedback:
+    #     required_datasets.append(["rbiswasfc/ultrafeedback-binary-classification"])
 
     # Redirect stdout and stderr to a string buffer
     string_io = io.StringIO()
@@ -434,7 +438,7 @@ def main(
     skip_wic: Annotated[bool, Option("--skip-wic", help="Skip the WIC eval", rich_help_panel="Skip Tasks")] = False,
     skip_ultrafeedback: Annotated[bool, Option("--skip-ultrafeedback", help="Skip the UltraFeedback eval", rich_help_panel="Skip Tasks")] = False,
     fast_ultrafeedback: Annotated[bool, Option("--fast-ultrafeedback", help="Use a shorter sequence length (1536) for the UltraFeedback eval", rich_help_panel="Task Settings")] = False,
-    seeds: Annotated[List[int], Option(help="List of seeds to use for the eval", rich_help_panel="Task Settings")] = [1618, 42, 6033, 3145],
+    seeds: Annotated[List[int], Option(help="List of seeds to use for the eval", rich_help_panel="Task Settings")] = [1618, 42, 6033],
     quiet: Annotated[bool, Option("-q", "--quiet", help="Suppress output from evaluation jobs", rich_help_panel="Config Options")] = False,
     overwrite_existing_symlinks: Annotated[bool, Option("--override-existing-symlinks", help="Overwrite existing symlinks to point to latest checkpoint", rich_help_panel="Config Options")] = False,
     parallel: Annotated[bool, Option("--parallel/--single", help="Run the evals in parallel on multiple GPUs or one GPU", rich_help_panel="Task Settings")] = False,
@@ -453,41 +457,41 @@ def main(
     for folder in checkpoints.glob("*"):
         create_symlink_for_newest_checkpoint(folder, overwrite_existing_symlinks)
 
-    if train_config:
-        config_files = [train_config]
-    elif not skip_generation:
-        print("\nGenerating evaluation configs...\n")
-        config_files_completed = list(checkpoints.glob("*_evaluation.yaml"))
-        print(f"Completed Jobs: {config_files_completed}")
+    # if train_config:
+    #     config_files = [train_config]
+    # elif not skip_generation:
+    print("\nGenerating evaluation configs...\n")
+    config_files_completed = [] # list(checkpoints.glob("*_evaluation.yaml"))
+    print(f"Completed Jobs: {config_files_completed}")
 
-        generate_eval_configs(
-            checkpoints=checkpoints,
-            train_config=train_config,
-            wandb_run=wandb_run,
-            wandb_project=wandb_project,
-            wandb_entity=wandb_entity,
-            track_run=track_run,
-            track_run_project=track_run_project,
-            pooling_type=pooling_type,
-            head_class_act=head_class_act,
-            head_class_norm=head_class_norm,
-            head_class_dropout=head_class_dropout,
-            skip_semipro=skip_semipro,
-            skip_reserve=skip_reserve,
-            skip_eurlex=skip_eurlex,
-            skip_mnli=skip_mnli,
-            skip_boolq=skip_boolq,
-            skip_wic=skip_wic,
-            skip_ultrafeedback=skip_ultrafeedback,
-            fast_ultrafeedback=fast_ultrafeedback,
-            seeds=seeds,
-            parallel=parallel,
-        )
-        config_files = list(checkpoints.glob("*_evaluation.yaml"))
-        config_files = sorted(list(set(config_files) - set(config_files_completed)))
-        print(f"Jobs to be run:\n{config_files}")
-    else:
-        config_files = list(checkpoints.glob("*_evaluation.yaml"))
+    # generate_eval_configs(
+    #     checkpoints=checkpoints,
+    #     train_config=train_config,
+    #     wandb_run=wandb_run,
+    #     wandb_project=wandb_project,
+    #     wandb_entity=wandb_entity,
+    #     track_run=track_run,
+    #     track_run_project=track_run_project,
+    #     pooling_type=pooling_type,
+    #     head_class_act=head_class_act,
+    #     head_class_norm=head_class_norm,
+    #     head_class_dropout=head_class_dropout,
+    #     skip_semipro=skip_semipro,
+    #     skip_reserve=skip_reserve,
+    #     skip_eurlex=skip_eurlex,
+    #     skip_mnli=skip_mnli,
+    #     skip_boolq=skip_boolq,
+    #     skip_wic=skip_wic,
+    #     skip_ultrafeedback=skip_ultrafeedback,
+    #     fast_ultrafeedback=fast_ultrafeedback,
+    #     seeds=seeds,
+    #     parallel=parallel,
+    # )
+    config_files = list(checkpoints.glob("*/*_evaluation.yaml"))
+    config_files = sorted(list(set(config_files) - set(config_files_completed)))
+    print(f"Jobs to be run:\n{config_files}")
+    # else:
+    #     config_files = list(checkpoints.glob("*_evaluation.yaml"))
 
     # Wait for the dataset download to complete
     print("Waiting for dataset downloads to complete...")

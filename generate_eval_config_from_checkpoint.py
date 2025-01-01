@@ -135,11 +135,14 @@ def main(
     fast_ultrafeedback: Annotated[bool, Option("--fast-ultrafeedback", help="Use a shorter sequence length (1536) for the UltraFeedback eval", rich_help_panel="Task Settings")] = False,
     seeds: Annotated[List[int], Option(help="List of seeds to use for the eval", rich_help_panel="Task Settings")] = [1618, 42, 6033, 3145],
     parallel: Annotated[bool, Option("--parallel/--single", help="Run the evals in parallel on multiple GPUs or one GPU", rich_help_panel="Task Settings")] = True,
+    eval_results_dir: Annotated[Optional[str], Option("--eval-results-dir", help="Name of the output directory for the eval results", rich_help_panel="Task Settings")] = "./finetuned-checkpoints",
 ):
 # fmt: on
     # Read the input YAML file
     os.makedirs(output_dir, exist_ok=True)
     input_config = None
+
+    batch_num = str(checkpoint).split("/")[-1].replace("-rank0.pt", "").split("-")[-1]
 
     if "pt" in str(checkpoint):
         ckpt = checkpoint.name  # checkpoint
@@ -188,7 +191,7 @@ def main(
     new_config["parallel"] = parallel
     
     batch_id = ckpt_id.split("-")[-1].split(":")[0].strip()
-    base_run_name = safe_get(input_config, "run_name", ckpt_path) + f"-{batch_id}"
+    base_run_name = safe_get(input_config, "run_name") + f"-{batch_num}"
     new_config["base_run_name"] = base_run_name # safe_get(input_config, "run_name", ckpt_path) + "_evaluation"
     
     new_config["default_seed"] = 19
@@ -226,7 +229,7 @@ def main(
 
     new_config["starting_checkpoint_load_path"] = ckpt
     new_config["local_pretrain_checkpoint_folder"] = ckpt_path  # + "/"
-    new_config["save_finetune_checkpoint_prefix"] = "./finetuned-checkpoints"
+    new_config["save_finetune_checkpoint_prefix"] = eval_results_dir
     new_config["save_finetune_checkpoint_folder"] = "${save_finetune_checkpoint_prefix}/${base_run_name}"
 
     loggers = OrderedDict()
