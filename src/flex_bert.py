@@ -637,6 +637,7 @@ def create_flex_noop(
     pretrained_checkpoint: Optional[str] = None,
     recompute_metric_loss: Optional[bool] = False,
     disable_train_metrics: Optional[bool] = False,
+    data_save_folder: Optional[str] = "data_order/",
 ):
     """FlexBERT language model based on |:hugging_face:| Transformers.
 
@@ -709,7 +710,7 @@ def create_flex_noop(
         model_config = OmegaConf.to_container(model_config, resolve=True)
 
     config = configuration_bert_module.FlexBertConfig.from_pretrained(pretrained_model_name, **model_config)
-
+    config.data_save_folder = data_save_folder
     # if "prenorm" in config.bert_layer:
     #     assert config.final_norm, "Final norm must be used with prenorm attention"
     # else:

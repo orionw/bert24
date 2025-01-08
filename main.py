@@ -36,7 +36,10 @@ import src.flex_bert as flex_bert_module
 import src.hf_bert as hf_bert_module
 import src.mosaic_bert as mosaic_bert_module
 import src.text_data as text_data_module
-from src.callbacks.dataloader_speed import DataloaderSpeedMonitor, BatchSaverCallback, StepFolderCallback
+from src.callbacks.dataloader_speed import DataloaderSpeedMonitor
+# from src.callbacks.data_saving import BatchSaverCallback, StepFolderCallback
+# from src.callbacks.data_saving import HFDatasetSaver
+from src.callbacks.data_saving import OptimizedDataSaver
 from src.callbacks.log_grad_norm import LogGradNorm
 from src.callbacks.packing_efficiency import PackingEfficency
 from src.callbacks.scheduled_gc import ScheduledGarbageCollector
@@ -154,10 +157,15 @@ def build_callback(name, kwargs):
         return DataloaderSpeedMonitor()
     elif name == "packing_efficiency":
         return PackingEfficency(log_interval=kwargs.get("log_interval", 10))
-    elif name == "batch_saver":
-        return BatchSaverCallback(steps_per_file=kwargs.get("steps_per_file", 10))
-    elif name == "step_folder":
-        return StepFolderCallback(data_save_folder=kwargs.get("data_save_folder", "data_order"), folder_format=kwargs.get("model", "step_{step:06d}"))
+    elif name == "optimized_data_saver":
+        return OptimizedDataSaver(data_save_folder=kwargs.get("data_save_folder", "data_order"), model_save_folder=kwargs.get("model_save_folder", "saved_folders_null_delete_me"), save_interval=kwargs.get("save_interval", "8_500_000_000tok"), num_workers=kwargs.get("num_workers", 10), compression_level=kwargs.get("compression_level", 19))
+    # elif name == "batch_saver":
+    #     return BatchSaverCallback(steps_per_file=kwargs.get("steps_per_file", 10))
+    # elif name == "step_folder":
+    #     model_save_folder = kwargs.get("model_save_folder", "saved_folders_null_delete_me")
+    #     return StepFolderCallback(data_save_folder=kwargs.get("data_save_folder", "data_order"), model_save_folder=model_save_folder, save_interval=kwargs.get("save_interval", "8_500_000_000tok"))
+    # elif name == "hf_dataset_saver":
+    #     return HFDatasetSaver(repo_id="blab-jhu/data-order", save_interval="8_500_000_000tok", batch_buffer_size=100, token=os.environ.get("HF_TOKEN"))
     else:
         raise ValueError(f"Not sure how to build callback: {name}")
 
@@ -331,6 +339,7 @@ def build_model(cfg: DictConfig):
             gradient_checkpointing=cfg.get("gradient_checkpointing", None),
             recompute_metric_loss=cfg.get("recompute_metric_loss", False),
             disable_train_metrics=cfg.get("disable_train_metrics", False),
+            data_save_folder=cfg.get("data_save_folder", "data_order/"),
         )
     else:
         raise ValueError(f"Not sure how to build model with name={cfg.name}")

@@ -39,7 +39,7 @@ train_loader:
     shuffle_seed: 21
     suppress_masking: true
   drop_last: true
-  num_workers: 6
+  num_workers: 10
   sequence_packing: false
   batch_size_warmup_min_size: ${device_train_microbatch_size}
   batch_size_warmup_tokens: 0tok
@@ -107,8 +107,10 @@ callbacks:
     batch_log_interval: 100
   packing_efficiency:
     log_interval: 100
-  batch_saver: {}
-  step_folder: {}
+  # hf_dataset_saver: {}
+  optimized_data_saver: {}
+  # batch_saver: {}
+  # step_folder: {}
  
 # W&B logging
 loggers:

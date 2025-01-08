@@ -1734,6 +1734,7 @@ class FlexBertForNoOp(FlexBertPreTrainedModel):
         self.dummy = nn.Linear(1, 1)
         self.criterion = nn.MSELoss()
         self.target = None
+        self.config = config
 
         self.loss_fn = nn.CrossEntropyLoss() if not hasattr(config, "loss_function") else get_loss_fn(config)
         self.fa_ce = getattr(config, "loss_function", "cross_entropy") == "fa_cross_entropy"
