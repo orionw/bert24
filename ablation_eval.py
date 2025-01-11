@@ -224,6 +224,17 @@ def build_model(cfg: DictConfig, num_labels: int, multiple_choice: bool = False,
             multiple_choice=multiple_choice,
             **kwargs,
         )
+    elif cfg.name == "flex_gpt":
+        return flex_bert_module.create_flex_gpt_classification(
+            num_labels=num_labels,
+            pretrained_model_name=cfg.pretrained_model_name,
+            pretrained_checkpoint=cfg.get("pretrained_checkpoint", None),
+            model_config=cfg.get("model_config", None),
+            tokenizer_name=cfg.get("tokenizer_name", None),
+            gradient_checkpointing=cfg.get("gradient_checkpointing", None),
+            multiple_choice=multiple_choice,
+            **kwargs,
+        )
     else:
         raise ValueError(f"Not sure how to build model with name={cfg.name}")
 

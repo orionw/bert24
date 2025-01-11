@@ -1614,6 +1614,7 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
         max_seqlen: Optional[int] = None,
         batch_size: Optional[int] = None,
         seq_len: Optional[int] = None,
+        skip_loss: Optional[bool] = False,
         **kwargs,
     ) -> Union[Tuple[torch.Tensor], CausalLMOutput]:
         # labels should be a `torch.LongTensor` of shape
@@ -1652,7 +1653,7 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
             logits = self.lm_head(hidden_states)
 
         loss = None
-        if labels is not None:
+        if labels is not None and not skip_loss:
             if cu_seqlens is not None:                
                 shift_labels = input_ids[1:].clone()    
                 loss_logits = logits[:-1]  # Only shift for loss
@@ -1686,7 +1687,7 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
             return CausalLMOutput(
                 loss=loss,
                 logits=self.pad_inputs(logits, indices, batch_size, seq_len)[0],
-                hidden_states=hidden_states,
+                hidden_states=self.pad_inputs(hidden_states, indices, batch_size, seq_len)[0],
                 attentions=None,
             )
         else:
@@ -1722,6 +1723,273 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
         params += _count_parameters(self.lm_head, trainable)
         return params
 
+
+class FlexGPTForSequenceClassification(FlexBertPreTrainedModel):
+    """GPT Model transformer with a sequence classification/regression head.
+
+    This head is just a linear layer on top of the pooled output. Used for,
+    e.g., GLUE tasks.
+    """
+
+    def __init__(self, config: FlexBertConfig):
+        super().__init__(config)
+        self.num_labels = config.num_labels
+        self.config = config
+
+        self.gpt = FlexBertForCausalLM(config)
+        self.gpt.pad_logits = True
+        self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+
+        # Initialize weights and apply final processing
+        self._init_weights(reset_params=False)
+
+    def _init_weights(self, module: Optional[nn.Module] = None, reset_params: Optional[bool] = None):
+        assert (module is None) != (reset_params is None), "arg module xor reset_params must be specified"
+        if module:
+            self._init_module_weights(module)
+        else:
+            assert isinstance(reset_params, bool)
+            self.gpt._init_weights(reset_params=reset_params)
+            init_weights(self.config, self.classifier, self.config.hidden_size, type_of_module=ModuleType.final_out)
+
+    @classmethod
+    def from_composer(
+        cls,
+        pretrained_checkpoint,
+        state_dict=None,
+        cache_dir=None,
+        from_tf=False,
+        config=None,
+        *inputs,
+        **kwargs,
+    ):
+        """Load from pre-trained."""
+        model = cls(config, *inputs, **kwargs)
+        if from_tf:
+            raise ValueError("Mosaic BERT does not support loading TensorFlow weights.")
+
+        state_dict = torch.load(pretrained_checkpoint)
+        # If the state_dict was saved after wrapping with `composer.HuggingFaceModel`, it takes on the `model` prefix
+        consume_prefix_in_state_dict_if_present(state_dict, prefix="model.")
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+
+        if len(missing_keys) > 0:
+            logger.warning(f"Found these missing keys in the checkpoint: {', '.join(missing_keys)}")
+        if len(unexpected_keys) > 0:
+            logger.warning(f"Found these unexpected keys in the checkpoint: {', '.join(unexpected_keys)}")
+
+        return model
+
+    def forward(
+        self,
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple[torch.Tensor], SequenceClassifierOutput]:
+        # labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
+        # Labels for computing the sequence classification/regression loss.
+        # Indices should be in `[0, ..., config.num_labels - 1]`.
+        # If `config.num_labels == 1` a regression loss is computed
+        # (mean-square loss). If `config.num_labels > 1` a classification loss
+        # is computed (cross-entropy).
+        assert attention_mask is not None, "attention_mask cannot be None for getting last token"
+        # assert eos is present in some position in the input_ids for each one
+        assert torch.any(input_ids == 50282), "EOS token not found in input_ids"    
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        output = self.gpt(
+            input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            skip_loss=True,
+        )
+        assert output.hidden_states.size(1) == attention_mask.size(1), "sequence length mismatch"
+
+        # but this includes pad tokens
+        last_non_pad = attention_mask.sum(dim=1) - 2  # [batch_size]
+        batch_indices = torch.arange(output.hidden_states.size(0), device=output.hidden_states.device)
+
+        # Index into hidden states to get last non-pad token representation
+        last_hidden = output.hidden_states[batch_indices, last_non_pad]  # [batch_size, hidden_dim]
+        
+        logits = self.classifier(last_hidden)
+
+        loss = None
+        if labels is not None:
+            # Compute loss
+            if self.config.problem_type is None:
+                if self.num_labels == 1:
+                    self.config.problem_type = "regression"
+                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                    self.config.problem_type = "single_label_classification"
+                else:
+                    self.config.problem_type = "multi_label_classification"
+
+            if self.config.problem_type == "regression":
+                loss_fct = nn.MSELoss()
+                if self.num_labels == 1:
+                    loss = loss_fct(logits.squeeze(), labels.squeeze())
+                else:
+                    loss = loss_fct(logits, labels)
+            elif self.config.problem_type == "single_label_classification":
+                loss_fct = nn.CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            elif self.config.problem_type == "multi_label_classification":
+                loss_fct = nn.BCEWithLogitsLoss()
+                loss = loss_fct(logits, labels)
+
+        if not return_dict:
+            output = (logits,) + output
+            return ((loss,) + output) if loss is not None else output
+
+        return SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=None,
+            attentions=None,
+        )
+
+    def get_number_parameters(self, count_embeddings: bool = True, trainable: bool = True) -> int:
+        """Returns the number of parameters in the model.
+
+        Args:
+            count_embeddings: count the parameters in the embeddings layer, excluding position embeddings.
+            trainable: only count trainable parameters.
+        """
+        params = self.gpt.get_number_parameters(count_embeddings, trainable)
+        params += _count_parameters(self.classifier, trainable)
+        return params
+
+
+class FlexGPTForMultipleChoice(FlexBertPreTrainedModel):
+    """
+    GPT Model with a multiple choice classification head on top (a linear layer on top of the pooled output and a
+    softmax) e.g. for RocStories/SWAG tasks.
+    """
+
+    def __init__(self, config: FlexBertConfig):
+        super().__init__(config)
+        self.num_labels = config.num_labels
+        self.config = config
+
+        self.gpt = FlexBertForCausalLM(config)
+        self.gpt.pad_logits = True
+
+        # In multiple choice tasks, all choices are submitted in a batch, and
+        # we compute a logit for each option independently. The logits are then
+        # normalized in the forward pass to get a probability distribution over
+        # the choices.
+        self.classifier = nn.Linear(config.hidden_size, 1)
+
+        # Initialize weights and apply final processing
+        self._init_weights(reset_params=False)
+
+    def _init_weights(self, module: Optional[nn.Module] = None, reset_params: Optional[bool] = None):
+        assert (module is None) != (reset_params is None), "arg module xor reset_params must be specified"
+        if module:
+            self._init_module_weights(module)
+        else:
+            assert isinstance(reset_params, bool)
+            self.gpt._init_weights(reset_params=reset_params)
+            init_weights(self.config, self.classifier, self.config.hidden_size, type_of_module=ModuleType.final_out)
+
+    @classmethod
+    def from_composer(
+        cls,
+        pretrained_checkpoint,
+        state_dict=None,
+        cache_dir=None,
+        from_tf=False,
+        config=None,
+        *inputs,
+        **kwargs,
+    ):
+        """Load from pre-trained."""
+        model = cls(config, *inputs, **kwargs)
+        if from_tf:
+            raise ValueError("Mosaic BERT does not support loading TensorFlow weights.")
+
+        state_dict = torch.load(pretrained_checkpoint)
+        # If the state_dict was saved after wrapping with `composer.HuggingFaceModel`, it takes on the `model` prefix
+        consume_prefix_in_state_dict_if_present(state_dict, prefix="model.")
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+
+        if len(missing_keys) > 0:
+            logger.warning(f"Found these missing keys in the checkpoint: {', '.join(missing_keys)}")
+        if len(unexpected_keys) > 0:
+            logger.warning(f"Found these unexpected keys in the checkpoint: {', '.join(unexpected_keys)}")
+
+        return model
+
+    def forward(
+        self,
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple[torch.Tensor], SequenceClassifierOutput]:
+        # labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
+        # Labels for computing the sequence classification/regression loss.
+        # Indices should be in `[0, ..., config.num_labels - 1]`.
+        # If `config.num_labels == 1` a regression loss is computed
+        # (mean-square loss). If `config.num_labels > 1` a classification loss
+        # is computed (cross-entropy).
+        assert attention_mask is not None, "attention_mask cannot be None for getting last token"
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        num_choices = input_ids.shape[1]
+
+        input_ids = input_ids.view(-1, input_ids.size(-1)) if input_ids is not None else None
+        # assert eos is present in some position in the input_ids for each one
+        assert torch.any(input_ids == 50282), "EOS token not found in input_ids"        
+        attention_mask = attention_mask.view(-1, attention_mask.size(-1)) if attention_mask is not None else None
+        position_ids = position_ids.view(-1, position_ids.size(-1)) if position_ids is not None else None
+        output = self.gpt(
+            input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            skip_loss=True,
+        )
+        assert output.hidden_states.size(1) == attention_mask.size(1), "sequence length mismatch"
+
+        # but this includes pad tokens
+        last_non_pad = attention_mask.sum(dim=1) - 2  # [batch_size]
+        batch_indices = torch.arange(output.hidden_states.size(0), device=output.hidden_states.device)
+
+        # Index into hidden states to get last non-pad token representation
+        last_hidden = output.hidden_states[batch_indices, last_non_pad]  # [batch_size, hidden_dim]
+
+        logits = self.classifier(last_hidden)
+        reshaped_logits = logits.view(-1, num_choices)
+
+        loss = None
+        if labels is not None:
+            loss_fct = nn.CrossEntropyLoss()
+            loss = loss_fct(reshaped_logits, labels)
+
+        if not return_dict:
+            output = (reshaped_logits,) + output
+            return ((loss,) + output) if loss is not None else output
+
+        return MultipleChoiceModelOutput(
+            loss=loss,
+            logits=reshaped_logits,
+            hidden_states=None,
+            attentions=None,
+        )
+
+    def get_number_parameters(self, count_embeddings: bool = True, trainable: bool = True) -> int:
+        """Returns the number of parameters in the model.
+
+        Args:
+            count_embeddings: count the parameters in the embeddings layer, excluding position embeddings.
+            trainable: only count trainable parameters.
+        """
+        params = self.gpt.get_number_parameters(count_embeddings, trainable)
+        params += _count_parameters(self.classifier, trainable)
+        return params
+    
 
 def init_model_from_pretrained(
     pretrained_model: FlexBertModel,

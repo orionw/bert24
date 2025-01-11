@@ -34,6 +34,8 @@ from .model import (
     FlexBertForSequenceClassification,
     FlexBertForMultipleChoice,
     FlexBertForCausalLM,
+    FlexGPTForSequenceClassification,
+    FlexGPTForMultipleChoice,
 )
 
 
@@ -66,5 +68,7 @@ __all__ = [
     "FlexBertForMaskedLM",
     "FlexBertForSequenceClassification",
     "FlexBertForMultipleChoice",
-    "FlexBertForCausalLM"
+    "FlexBertForCausalLM",
+    "FlexGPTForSequenceClassification",
+    "FlexGPTForMultipleChoice",
 ]
