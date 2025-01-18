@@ -41,6 +41,8 @@ class MNLIJob(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
+        device_eval_microbatch_size: Optional[int] = 1,
+        learning_rate: Optional[float] = 5.0e-4,
         **kwargs,
     ):
         super().__init__(
@@ -64,10 +66,10 @@ class MNLIJob(ClassificationJob):
 
         self.optimizer = DecoupledAdamW(
             self.model.parameters(),
-            lr=5.0e-5,
+            lr=learning_rate,
             betas=(0.9, 0.98),
             eps=1.0e-06,
-            weight_decay=5.0e-06,
+            weight_decay=learning_rate / 10,
         )
 
         dataset_kwargs = {
@@ -89,11 +91,13 @@ class MNLIJob(ClassificationJob):
             label="glue_mnli",
             dataloader=build_dataloader(mnli_eval_dataset, **dataloader_kwargs),
             metric_names=["MulticlassAccuracy"],
+            device_eval_microbatch_size=device_eval_microbatch_size
         )
         mnli_evaluator_mismatched = Evaluator(
             label="glue_mnli_mismatched",
             dataloader=build_dataloader(mnli_eval_mismatched_dataset, **dataloader_kwargs),
             metric_names=["MulticlassAccuracy"],
+            device_eval_microbatch_size=device_eval_microbatch_size
         )
         self.evaluators = [mnli_evaluator, mnli_evaluator_mismatched]
 
@@ -119,6 +123,8 @@ class RTEJob(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
+        device_eval_microbatch_size: Optional[int] = 1,
+        learning_rate: Optional[float] = 1.0e-5,
         **kwargs,
     ):
         super().__init__(
@@ -142,10 +148,10 @@ class RTEJob(ClassificationJob):
 
         self.optimizer = DecoupledAdamW(
             self.model.parameters(),
-            lr=1.0e-5,
+            lr=learning_rate,
             betas=(0.9, 0.98),
             eps=1.0e-06,
-            weight_decay=1.0e-5,
+            weight_decay=learning_rate / 10,
         )
 
         dataset_kwargs = {
@@ -166,6 +172,7 @@ class RTEJob(ClassificationJob):
             label="glue_rte",
             dataloader=build_dataloader(rte_eval_dataset, **dataloader_kwargs),
             metric_names=["MulticlassAccuracy"],
+            device_eval_microbatch_size=device_eval_microbatch_size
         )
         self.evaluators = [rte_evaluator]
 
@@ -191,6 +198,8 @@ class QQPJob(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
+        device_eval_microbatch_size: Optional[int] = 1,
+        learning_rate: Optional[float] = 3.0e-5,
         **kwargs,
     ):
         super().__init__(
@@ -263,6 +272,8 @@ class COLAJob(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
+        device_eval_microbatch_size: Optional[int] = 1,
+        learning_rate: Optional[float] = 5.0e-5,
         **kwargs,
     ):
         super().__init__(
@@ -286,10 +297,10 @@ class COLAJob(ClassificationJob):
 
         self.optimizer = DecoupledAdamW(
             self.model.parameters(),
-            lr=5.0e-5,
+            lr=learning_rate,
             betas=(0.9, 0.98),
             eps=1.0e-06,
-            weight_decay=5.0e-6,
+            weight_decay=learning_rate / 10,
         )
 
         dataset_kwargs = {
@@ -335,6 +346,8 @@ class MRPCJob(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
+        device_eval_microbatch_size: Optional[int] = 1,
+        learning_rate: Optional[float] = 8.0e-5,
         **kwargs,
     ):
         super().__init__(
@@ -358,10 +371,10 @@ class MRPCJob(ClassificationJob):
 
         self.optimizer = DecoupledAdamW(
             self.model.parameters(),
-            lr=8.0e-5,
+            lr=learning_rate,
             betas=(0.9, 0.98),
             eps=1.0e-06,
-            weight_decay=8.0e-6,
+            weight_decay=learning_rate / 10,
         )
 
         dataset_kwargs = {
@@ -407,6 +420,8 @@ class QNLIJob(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
+        device_eval_microbatch_size: Optional[int] = 1,
+        learning_rate: Optional[float] = 1.0e-5,
         **kwargs,
     ):
         super().__init__(
@@ -430,10 +445,10 @@ class QNLIJob(ClassificationJob):
 
         self.optimizer = DecoupledAdamW(
             self.model.parameters(),
-            lr=1.0e-5,
+            lr=learning_rate,
             betas=(0.9, 0.98),
             eps=1.0e-06,
-            weight_decay=1.0e-6,
+            weight_decay=learning_rate / 10,
         )
 
         dataset_kwargs = {
@@ -479,6 +494,8 @@ class SST2Job(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
+        device_eval_microbatch_size: Optional[int] = 1,
+        learning_rate: Optional[float] = 3.0e-5,
         **kwargs,
     ):
         super().__init__(
@@ -502,10 +519,10 @@ class SST2Job(ClassificationJob):
 
         self.optimizer = DecoupledAdamW(
             self.model.parameters(),
-            lr=3.0e-5,
+            lr=learning_rate,
             betas=(0.9, 0.98),
             eps=1.0e-06,
-            weight_decay=3.0e-6,
+            weight_decay=learning_rate / 10,
         )
 
         dataset_kwargs = {
@@ -551,6 +568,8 @@ class STSBJob(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
+        device_eval_microbatch_size: Optional[int] = 1,
+        learning_rate: Optional[float] = 3.0e-5,
         **kwargs,
     ):
         super().__init__(
@@ -574,10 +593,10 @@ class STSBJob(ClassificationJob):
 
         self.optimizer = DecoupledAdamW(
             self.model.parameters(),
-            lr=3.0e-5,
+            lr=learning_rate,
             betas=(0.9, 0.98),
             eps=1.0e-06,
-            weight_decay=3.0e-6,
+            weight_decay=learning_rate / 10,
         )
 
         dataset_kwargs = {
@@ -598,6 +617,7 @@ class STSBJob(ClassificationJob):
             label="glue_stsb",
             dataloader=build_dataloader(stsb_eval_dataset, **dataloader_kwargs),
             metric_names=["SpearmanCorrCoef"],
+            device_eval_microbatch_size=device_eval_microbatch_size
         )
         self.evaluators = [stsb_evaluator]
 

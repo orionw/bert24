@@ -1267,7 +1267,6 @@ class FlexBertForSequenceClassification(FlexBertPreTrainedModel):
         # Initialize weights and apply final processing
         self._init_weights(reset_params=False)
 
-
     def _init_weights(self, module: Optional[nn.Module] = None, reset_params: Optional[bool] = None):
         assert (module is None) != (reset_params is None), "arg module xor reset_params must be specified"
         if module:
@@ -1328,9 +1327,10 @@ class FlexBertForSequenceClassification(FlexBertPreTrainedModel):
             attention_mask=attention_mask,
             position_ids=position_ids,
         )
+
         pooled_output = self.head(output)
         logits = self.classifier(pooled_output)
-        
+
         loss = None
         if labels is not None:
             # Compute loss
@@ -1509,7 +1509,6 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
 
     def __init__(self, config: FlexBertConfig):
         super().__init__(config)
-        assert config.is_causal, "FlexBertForCausalLM requires is_causal=True"
         self.bert = FlexBertModel(config)
         self.bert.is_decoder = True
         self.lm_head = FlexBertPredictionHead(config)
@@ -1579,13 +1578,13 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
     def set_output_embeddings(self, new_embeddings):
         self.decoder = new_embeddings
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def unpad_inputs(
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor, position_ids: torch.Tensor, labels: torch.Tensor
     ):
         return unpad_input(input_ids, attention_mask, position_ids, labels)
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def pad_inputs(
         self,
         inputs: torch.Tensor,
@@ -1736,15 +1735,21 @@ class FlexGPTForSequenceClassification(FlexBertPreTrainedModel):
 
     def __init__(self, config: FlexBertConfig):
         super().__init__(config)
-        super().__init__(config)
         self.num_labels = config.num_labels
         self.config = config
 
         self.bert = FlexBertForCausalLM(config)
-        self.head = FlexBertPoolingHead(config)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+        self.bert.pad_logits = True # assume we are unpadding
+
+        # Example isolation test:
+        # for param in self.bert.parameters():
+        #     param.requires_grad = False  # Freeze BERT
+
         # Initialize weights and apply final processing
         self._init_weights(reset_params=False)
+        nn.init.normal_(self.classifier.weight, mean=0.0, std=0.1)
+        nn.init.zeros_(self.classifier.bias)
 
     def _init_weights(self, module: Optional[nn.Module] = None, reset_params: Optional[bool] = None):
         assert (module is None) != (reset_params is None), "arg module xor reset_params must be specified"
@@ -1753,8 +1758,9 @@ class FlexGPTForSequenceClassification(FlexBertPreTrainedModel):
         else:
             assert isinstance(reset_params, bool)
             self.bert._init_weights(reset_params=reset_params)
-            self.head._init_weights(reset_params=reset_params)
-            init_weights(self.config, self.classifier, self.config.hidden_size, type_of_module=ModuleType.final_out)
+            # self.head._init_weights(reset_params=reset_params)
+            # init_weights(self.config, self.classifier, self.config.hidden_size, type_of_module=ModuleType.final_out)
+
 
     @classmethod
     def from_composer(
@@ -1773,7 +1779,6 @@ class FlexGPTForSequenceClassification(FlexBertPreTrainedModel):
             raise ValueError("Mosaic BERT does not support loading TensorFlow weights.")
 
         state_dict = torch.load(pretrained_checkpoint)
-        logger.info(f"Initial state dict keys: {state_dict.keys()}")
         # If the state_dict was saved after wrapping with `composer.HuggingFaceModel`, it takes on the `model` prefix
         consume_prefix_in_state_dict_if_present(state_dict, prefix="model.")
         missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
@@ -1799,23 +1804,59 @@ class FlexGPTForSequenceClassification(FlexBertPreTrainedModel):
         # If `config.num_labels == 1` a regression loss is computed
         # (mean-square loss). If `config.num_labels > 1` a classification loss
         # is computed (cross-entropy).
+        assert attention_mask is not None, "attention_mask cannot be None for getting last token"
+        # assert eos is present in some position in the input_ids for each one
+        assert torch.any(input_ids == 50282), "EOS token not found in input_ids"    
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         output = self.bert(
             input_ids,
-            attention_mask=attention_mask, # note that FA will use causal mask if set in config
+            attention_mask=attention_mask,
             position_ids=position_ids,
             skip_loss=True,
-        )
-        head_output = self.head(output.hidden_states)
-        classifier_output = self.classifier(head_output)
-        batch_size = input_ids.shape[0]
+        )            
+        hidden_states = output.hidden_states
+        
+        # breakpoint()
+
+        # Apply classifier to all hidden states
+        logits = self.classifier(hidden_states)
+
+        # Get sequence lengths
         sequence_lengths = attention_mask.sum(dim=1) - 1
-        logits = classifier_output[torch.arange(batch_size, device=classifier_output.device), sequence_lengths]
+        print("Hidden state differences between examples:", 
+            (hidden_states[0, sequence_lengths[0]] - hidden_states[1, sequence_lengths[1]]).norm().item())
+
+        # Select logits for the last non-padding token
+        pooled_logits = logits[torch.arange(input_ids.shape[0], device=input_ids.device), sequence_lengths] * 10
+
+
+        # Add diagnostics
+        print(f"Last hidden norm: {hidden_states.norm(dim=-1).mean():.4f}")
+        print(f"Last hidden mean/std: {hidden_states.mean():.4f}/{hidden_states.std():.4f}")
+        
+        # Single transformation through classifier
+        print(f"Pre-softmax logits mean/std: {pooled_logits.mean():.4f}/{pooled_logits.std():.4f}")
+        print(f"Sample logit differences: {(pooled_logits[0].max() - pooled_logits[0].min()):.4f}")
+        # print(f"Logits mean/std: {pooled_logits.mean().item():.4f}/{pooled_logits.std().item():.4f}")
+        # print(f"Sample logits: {pooled_logits[0]}")  # Look at actual values
+    
+        
+        print("Classifier weight mean/std:", self.classifier.weight.mean().item(), self.classifier.weight.std().item())
+
+        # Before the loss computation
+        # print("Hidden states requires grad:", output.hidden_states.requires_grad)
+        # print("Pooled logits sample:", pooled_logits[:5])  # Look at first 5 examples
+        # print("Classifier weight grad after:", self.classifier.weight.grad)
 
         loss = None
         if labels is not None:
-            # Compute loss
+            # Your existing loss computation code stays the same
+                        # Right before loss computation
+            # print("Labels shape:", labels.shape)
+            # print("Labels sample:", labels[:5])
+            # print("Labels dtype:", labels.dtype)
+            # print("Pooled logits shape:", pooled_logits.shape)
             if self.config.problem_type is None:
                 if self.num_labels == 1:
                     self.config.problem_type = "regression"
@@ -1827,27 +1868,64 @@ class FlexGPTForSequenceClassification(FlexBertPreTrainedModel):
             if self.config.problem_type == "regression":
                 loss_fct = nn.MSELoss()
                 if self.num_labels == 1:
-                    loss = loss_fct(logits.squeeze(), labels.squeeze())
+                    loss = loss_fct(pooled_logits.squeeze(), labels.squeeze())
                 else:
-                    loss = loss_fct(logits, labels)
+                    loss = loss_fct(pooled_logits, labels)
             elif self.config.problem_type == "single_label_classification":
                 loss_fct = nn.CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+                loss = loss_fct(pooled_logits.view(-1, self.num_labels), labels.view(-1))
+                from torch.nn import functional as F
+                probs = F.softmax(pooled_logits, dim=-1)
+                predictions = torch.argmax(pooled_logits, dim=-1)
+                print(f"Label distribution: {torch.bincount(labels.view(-1), minlength=3)}")
+                print(f"Prediction distribution: {torch.bincount(predictions, minlength=3)}")
+                print(f"Sample batch - \nLabels: {labels[:5]}\nPredictions: {predictions[:5]}")
             elif self.config.problem_type == "multi_label_classification":
                 loss_fct = nn.BCEWithLogitsLoss()
-                loss = loss_fct(logits, labels)
+                loss = loss_fct(pooled_logits, labels)
+
+        # breakpoint()
+    # After loss.backward() but before optimizer step
+        # loss.backward()
+        # for name, param in self.bert.named_parameters():
+        #     if param.requires_grad and param.grad is not None:
+        #         print(f"{name} grad norm: {param.grad.norm().item()}")
+        #     else:
+        #         print(f"{name} grad norm: None")
+
+        # breakpoint()
+        # print("Loss after computation:", loss)
+        # # print("Loss requires grad:", loss.requires_grad if loss is not None else None)
+        # # assert loss.requires_grad, "Loss should require grad"
+        # # breakpoint()
+        # loss.backward()
+        # grad_norm = self.classifier.weight.grad.norm().item()
+        # param_norm = self.classifier.weight.norm().item()
+        # print(f"\nGradient norm: {grad_norm:.6f}")
+        # print(f"Parameter norm: {param_norm:.6f}")
+
+        # print("Classifier weight:", self.classifier.weight)
+        # # print(self.bert.bert.embeddings.tok_embeddings.weight)
+        # breakpoint()
+
+        # print("Gradient stats:")
+        # print(f"Gradient max: {self.classifier.weight.grad.abs().max().item()}")
+        # print(f"Gradient histogram:", torch.histogram(self.classifier.weight.grad.abs(), bins=5))
+        # print("Weight update check:")
+        # old_weights = self.classifier.weight.clone()
+
+
 
         if not return_dict:
-            output = (logits,) + output
+            output = (pooled_logits,) + output
             return ((loss,) + output) if loss is not None else output
-
+        
         return SequenceClassifierOutput(
             loss=loss,
-            logits=logits,
+            logits=pooled_logits,
             hidden_states=None,
             attentions=None,
         )
-
 
     def get_number_parameters(self, count_embeddings: bool = True, trainable: bool = True) -> int:
         """Returns the number of parameters in the model.
@@ -1857,11 +1935,11 @@ class FlexGPTForSequenceClassification(FlexBertPreTrainedModel):
             trainable: only count trainable parameters.
         """
         params = self.bert.get_number_parameters(count_embeddings, trainable)
-        params += _count_parameters(self.head, trainable)
+        # params += self.head.get_number_parameters(count_embeddings, trainable)
+        params += self.classifier.get_number_parameters(count_embeddings, trainable)
         params += _count_parameters(self.classifier, trainable)
         return params
     
-
 
 class FlexGPTForMultipleChoice(FlexBertPreTrainedModel):
     """
@@ -1874,9 +1952,15 @@ class FlexGPTForMultipleChoice(FlexBertPreTrainedModel):
         self.num_labels = config.num_labels
         self.config = config
 
-        self.bert = FlexBertForCausalLM(config)
-        self.head = FlexBertPoolingHead(config)
-        self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+        self.gpt = FlexBertForCausalLM(config)
+        self.gpt.pad_logits = True
+
+        # In multiple choice tasks, all choices are submitted in a batch, and
+        # we compute a logit for each option independently. The logits are then
+        # normalized in the forward pass to get a probability distribution over
+        # the choices.
+        self.classifier = nn.Linear(config.hidden_size, 1, bias=False)
+        assert False
 
         # Initialize weights and apply final processing
         self._init_weights(reset_params=False)
@@ -1887,8 +1971,7 @@ class FlexGPTForMultipleChoice(FlexBertPreTrainedModel):
             self._init_module_weights(module)
         else:
             assert isinstance(reset_params, bool)
-            self.bert._init_weights(reset_params=reset_params)
-            self.head._init_weights(reset_params=reset_params)
+            self.gpt._init_weights(reset_params=reset_params)
             init_weights(self.config, self.classifier, self.config.hidden_size, type_of_module=ModuleType.final_out)
 
     @classmethod
@@ -1933,31 +2016,46 @@ class FlexGPTForMultipleChoice(FlexBertPreTrainedModel):
         # If `config.num_labels == 1` a regression loss is computed
         # (mean-square loss). If `config.num_labels > 1` a classification loss
         # is computed (cross-entropy).
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict      
-        output = self.bert(
+        assert attention_mask is not None, "attention_mask cannot be None for getting last token"
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        num_choices = input_ids.shape[1]
+
+        input_ids = input_ids.view(-1, input_ids.size(-1)) if input_ids is not None else None
+        # assert eos is present in some position in the input_ids for each one
+        assert torch.any(input_ids == 50282), "EOS token not found in input_ids"        
+        attention_mask = attention_mask.view(-1, attention_mask.size(-1)) if attention_mask is not None else None
+        position_ids = position_ids.view(-1, position_ids.size(-1)) if position_ids is not None else None
+        output = self.gpt(
             input_ids,
-            attention_mask=attention_mask, # note that FA will use causal mask if set in config
+            attention_mask=attention_mask,
             position_ids=position_ids,
             skip_loss=True,
         )
-        head_output = self.head(output.hidden_states)
-        classifier_output = self.classifier(head_output)
-        batch_size = input_ids.shape[0]
-        sequence_lengths = attention_mask.sum(dim=1) - 1
-        logits = classifier_output[torch.arange(batch_size, device=classifier_output.device), sequence_lengths]
+        assert output.hidden_states.size(1) == attention_mask.size(1), "sequence length mismatch"
+
+        # Apply classifier to all positions first
+        logits = self.classifier(output.hidden_states)  # [batch_size, seq_len, num_labels]
+        
+        # Find positions of pad tokens
+        sequence_lengths = torch.eq(input_ids, self.config.pad_token_id).int().argmax(-1) - 1
+        
+        # Select logits at the appropriate positions
+        batch_indices = torch.arange(logits.size(0), device=logits.device)
+        pooled_logits = logits[batch_indices, sequence_lengths]  # [batch_size, num_labels]
+        reshaped_logits = pooled_logits.view(-1, num_choices)
 
         loss = None
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss()
-            loss = loss_fct(logits, labels)
+            loss = loss_fct(reshaped_logits, labels)
 
         if not return_dict:
-            output = (logits,) + output
+            output = (reshaped_logits,) + output
             return ((loss,) + output) if loss is not None else output
 
         return MultipleChoiceModelOutput(
             loss=loss,
-            logits=logits,
+            logits=reshaped_logits,
             hidden_states=None,
             attentions=None,
         )
@@ -1969,8 +2067,7 @@ class FlexGPTForMultipleChoice(FlexBertPreTrainedModel):
             count_embeddings: count the parameters in the embeddings layer, excluding position embeddings.
             trainable: only count trainable parameters.
         """
-        params = self.bert.get_number_parameters(count_embeddings, trainable)
-        params += _count_parameters(self.head, trainable)
+        params = self.gpt.get_number_parameters(count_embeddings, trainable)
         params += self.classifier.get_number_parameters(count_embeddings, trainable)
         params += _count_parameters(self.classifier, trainable)
         return params

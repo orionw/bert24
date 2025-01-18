@@ -340,6 +340,8 @@ class MultiRCJob(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
+        device_eval_microbatch_size: Optional[int] = 1,
+        learning_rate: Optional[float] = 5.0e-5,
         **kwargs,
     ):
         super().__init__(
@@ -363,10 +365,10 @@ class MultiRCJob(ClassificationJob):
 
         self.optimizer = DecoupledAdamW(
             self.model.parameters(),
-            lr=5e-5,
+            lr=learning_rate,
             betas=(0.9, 0.98),
-            eps=1e-6,
-            weight_decay=5e-6,
+            eps=1.0e-6,
+            weight_decay=5.0e-6,
         )
 
         def tokenize_fn_factory(tokenizer, max_seq_length):
@@ -422,6 +424,7 @@ class MultiRCJob(ClassificationJob):
             label="superglue_multirc",
             dataloader=build_dataloader(multirc_eval_dataset, **dataloader_kwargs),
             metric_names=["MultiRCMetric"],
+            device_eval_microbatch_size=device_eval_microbatch_size
         )
         self.evaluators = [multirc_evaluator]
 
@@ -447,6 +450,8 @@ class WiCJob(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
+        device_eval_microbatch_size: Optional[int] = 1,
+        learning_rate: Optional[float] = 3.0e-5,
         **kwargs,
     ):
         super().__init__(
@@ -470,10 +475,10 @@ class WiCJob(ClassificationJob):
 
         self.optimizer = DecoupledAdamW(
             self.model.parameters(),
-            lr=3.0e-5,
+            lr=learning_rate,
             betas=(0.9, 0.98),
             eps=1.0e-06,
-            weight_decay=3.0e-6,
+            weight_decay=learning_rate / 10,
         )
 
         dataset_kwargs = {
@@ -494,5 +499,6 @@ class WiCJob(ClassificationJob):
             label="superglue_wic",
             dataloader=build_dataloader(wic_eval_dataset, **dataloader_kwargs),
             metric_names=["MulticlassAccuracy"],
+            device_eval_microbatch_size=device_eval_microbatch_size
         )
         self.evaluators = [wic_evaluator]

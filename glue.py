@@ -156,6 +156,17 @@ def build_model(
             multiple_choice=multiple_choice,
             **kwargs,
         )
+    elif cfg.name == "flex_gpt":
+        return flex_bert_module.create_flex_gpt_classification(
+            num_labels=num_labels,
+            pretrained_model_name=cfg.pretrained_model_name,
+            pretrained_checkpoint=cfg.get("pretrained_checkpoint", None),
+            model_config=cfg.get("model_config", None),
+            tokenizer_name=cfg.get("tokenizer_name", None),
+            gradient_checkpointing=cfg.get("gradient_checkpointing", None),
+            multiple_choice=multiple_choice,
+            **kwargs,
+        )
     else:
         raise ValueError(f"Not sure how to build model with name={cfg.name}")
 
@@ -252,7 +263,6 @@ def create_job_configs(
             if "model_config" not in model_kwargs:
                 model_kwargs.model_config = {}
             model_kwargs.model_config.update(task_config.get("model_config", {})) # update with task specific model config
-
             task_seed_config = om.OmegaConf.create(
                 {
                     "task": task_name,
@@ -454,10 +464,14 @@ def train(config: om.DictConfig) -> None:
     # Downloads the starting checkpoint ahead of time so that
     # the different tasks don't all try to download it at the same time
     if config.get("starting_checkpoint_load_path", None):
-        local_pretrain_checkpoint_path = download_starting_checkpoint(
-            config.starting_checkpoint_load_path,
-            config.local_pretrain_checkpoint_folder,
-        )
+        if not os.path.exists(config.local_pretrain_checkpoint_folder):
+            local_pretrain_checkpoint_path = download_starting_checkpoint(
+                config.starting_checkpoint_load_path,
+                config.local_pretrain_checkpoint_folder,
+            )
+        else:
+            # already loaded
+            local_pretrain_checkpoint_path = os.path.join(config.local_pretrain_checkpoint_folder, os.path.basename(config.starting_checkpoint_load_path))
     else:
         local_pretrain_checkpoint_path = None
 
@@ -583,6 +597,13 @@ def train(config: om.DictConfig) -> None:
         _print_averaged_glue_results(
             [(key, value) for key, value in superglue_results_mean.items()]
         )
+
+    # save the pretty table to a file
+    with open("glue_results.txt", "w") as f:
+        # direct standard output to file
+        sys.stdout = f
+        _print_table(all_results)
+        sys.stdout = sys.__stdout__
 
 
 if __name__ == "__main__":

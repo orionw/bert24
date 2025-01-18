@@ -511,6 +511,8 @@ class MLMMLUReserveRookie(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
+        device_eval_microbatch_size: Optional[int] = 1,
+        learning_rate: Optional[float] = 3.0e-5,
         **kwargs,
     ):
         super().__init__(
@@ -535,10 +537,10 @@ class MLMMLUReserveRookie(ClassificationJob):
 
         self.optimizer = DecoupledAdamW(
             self.model.parameters(),
-            lr=3.0e-5,
+            lr=learning_rate,
             betas=(0.9, 0.98),
             eps=1.0e-6,
-            weight_decay=5.0e-06,
+            weight_decay=learning_rate / 6,
         )
 
         def tokenize_fn_factory(tokenizer, max_seq_length):
@@ -603,6 +605,7 @@ class MLMMLUReserveRookie(ClassificationJob):
                 **dataloader_kwargs,
             ),
             metric_names=["MulticlassAccuracy"],
+            device_eval_microbatch_size=device_eval_microbatch_size
         )
 
         reserve_evaluator = Evaluator(
@@ -613,6 +616,7 @@ class MLMMLUReserveRookie(ClassificationJob):
                 **dataloader_kwargs,
             ),
             metric_names=["MulticlassAccuracy"],
+            device_eval_microbatch_size=device_eval_microbatch_size
         )
 
         self.evaluators = [rookie_evaluator, reserve_evaluator]
