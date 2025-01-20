@@ -1294,10 +1294,35 @@ class FlexBertForSequenceClassification(FlexBertPreTrainedModel):
         if from_tf:
             raise ValueError("Mosaic BERT does not support loading TensorFlow weights.")
 
-        state_dict = torch.load(pretrained_checkpoint)
-        # If the state_dict was saved after wrapping with `composer.HuggingFaceModel`, it takes on the `model` prefix
+        checkpoint = torch.load(pretrained_checkpoint)
+        
+        # Handle nested state dict structure
+        if 'state' in checkpoint and 'model' in checkpoint['state']:
+            state_dict = checkpoint['state']['model']
+        else:
+            state_dict = checkpoint
+        
+        # If the state_dict was saved after wrapping with `composer.HuggingFaceModel`
         consume_prefix_in_state_dict_if_present(state_dict, prefix="model.")
-        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+        
+        # First try loading directly - if it works, we have a complete classification checkpoint
+        try:
+            missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=True)
+            logger.info("Successfully loaded complete classification checkpoint")
+            return model
+        except Exception as e:
+            logger.info("Could not load checkpoint directly, attempting remapping...")
+            
+        # If direct loading failed, assume we have a base model that needs remapping
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            if k in ['state', 'rng']:  # Skip metadata
+                continue
+    
+            new_state_dict[k] = v
+
+        # Load with strict=False to allow new head/classifier weights 
+        missing_keys, unexpected_keys = model.load_state_dict(new_state_dict, strict=False)
 
         if len(missing_keys) > 0:
             logger.warning(f"Found these missing keys in the checkpoint: {', '.join(missing_keys)}")
@@ -1428,10 +1453,35 @@ class FlexBertForMultipleChoice(FlexBertPreTrainedModel):
         if from_tf:
             raise ValueError("Mosaic BERT does not support loading TensorFlow weights.")
 
-        state_dict = torch.load(pretrained_checkpoint)
-        # If the state_dict was saved after wrapping with `composer.HuggingFaceModel`, it takes on the `model` prefix
+        checkpoint = torch.load(pretrained_checkpoint)
+        
+        # Handle nested state dict structure
+        if 'state' in checkpoint and 'model' in checkpoint['state']:
+            state_dict = checkpoint['state']['model']
+        else:
+            state_dict = checkpoint
+        
+        # If the state_dict was saved after wrapping with `composer.HuggingFaceModel`
         consume_prefix_in_state_dict_if_present(state_dict, prefix="model.")
-        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+        
+        # First try loading directly - if it works, we have a complete classification checkpoint
+        try:
+            missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=True)
+            logger.info("Successfully loaded complete classification checkpoint")
+            return model
+        except Exception as e:
+            logger.info("Could not load checkpoint directly, attempting remapping...")
+            
+        # If direct loading failed, assume we have a base model that needs remapping
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            if k in ['state', 'rng']:  # Skip metadata
+                continue
+    
+            new_state_dict[k] = v
+
+        # Load with strict=False to allow new head/classifier weights 
+        missing_keys, unexpected_keys = model.load_state_dict(new_state_dict, strict=False)
 
         if len(missing_keys) > 0:
             logger.warning(f"Found these missing keys in the checkpoint: {', '.join(missing_keys)}")
@@ -1439,7 +1489,7 @@ class FlexBertForMultipleChoice(FlexBertPreTrainedModel):
             logger.warning(f"Found these unexpected keys in the checkpoint: {', '.join(unexpected_keys)}")
 
         return model
-
+    
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,
