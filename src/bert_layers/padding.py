@@ -45,47 +45,6 @@ def unpad_input(
     return unpadded_inputs, indices, cu_seqlens, max_seqlen_in_batch, unpadded_position_ids, unpadded_labels
 
 
-# def pad_input(
-#     inputs: Tensor,
-#     indices: Tensor,
-#     batch: int,
-#     seqlen: int,
-#     labels: Optional[Tensor] = None,
-#     ignore_index: int = -100,
-# ) -> Tuple[Tensor, Optional[Tensor]]:
-#     """
-#     Add padding to sequences.
-
-#     Args:
-#         inputs: (total_nnz, ...) or (total_nnz,), where total_nnz = number of tokens selected in attention_mask.
-#         indices: (total_nnz)
-#         batch: int, batch size
-#         seqlen: int, max sequence length
-#         position_ids: (total_nnz) or None
-#         labels: (total_nnz) or None
-
-#     Returns:
-#         padded_inputs: (batch, seqlen, ...) or (batch, seqlen)
-#         padded_labels: (batch, seqlen) or None
-#     """
-#     if inputs.dim() == 1:
-#         output = torch.zeros(batch * seqlen, dtype=inputs.dtype, device=inputs.device)
-#         output[indices] = inputs
-#         padded_inputs = output.view(batch, seqlen)
-#     else:
-#         _, *rest = inputs.shape
-#         output = torch.zeros(batch * seqlen, *rest, dtype=inputs.dtype, device=inputs.device)
-#         output[indices] = inputs
-#         padded_inputs = output.view(batch, seqlen, *rest)
-
-#     padded_labels = None
-#     if labels is not None:
-#         padded_labels = torch.full((batch * seqlen,), fill_value=ignore_index, dtype=labels.dtype, device=labels.device)
-#         padded_labels[indices] = labels
-#         padded_labels = padded_labels.view(batch, seqlen)
-
-#     return padded_inputs, padded_labels
-
 def pad_input(
     inputs: Tensor,
     indices: Tensor,
@@ -95,30 +54,71 @@ def pad_input(
     ignore_index: int = -100,
 ) -> Tuple[Tensor, Optional[Tensor]]:
     """
-    Add padding to sequences while perfectly preserving gradient computation graph.
-    Uses only operations on the input tensor without creating new tensors.
+    Add padding to sequences.
+
+    Args:
+        inputs: (total_nnz, ...) or (total_nnz,), where total_nnz = number of tokens selected in attention_mask.
+        indices: (total_nnz)
+        batch: int, batch size
+        seqlen: int, max sequence length
+        position_ids: (total_nnz) or None
+        labels: (total_nnz) or None
+
+    Returns:
+        padded_inputs: (batch, seqlen, ...) or (batch, seqlen)
+        padded_labels: (batch, seqlen) or None
     """
     if inputs.dim() == 1:
-        pos = torch.arange(batch * seqlen, device=inputs.device)
-        mask = (pos.unsqueeze(0) == indices.unsqueeze(1)).to(inputs.dtype)
-        padded_inputs = (inputs.unsqueeze(-1) * mask).sum(0).view(batch, seqlen)
+        output = torch.zeros(batch * seqlen, dtype=inputs.dtype, device=inputs.device)
+        output[indices] = inputs
+        padded_inputs = output.view(batch, seqlen)
     else:
         _, *rest = inputs.shape
-        pos = torch.arange(batch * seqlen, device=inputs.device)
-        mask = (pos.unsqueeze(0) == indices.unsqueeze(1)).to(inputs.dtype)
-        padded_inputs = (inputs.view(inputs.size(0), -1).unsqueeze(-1) * mask.unsqueeze(1)).sum(0)
-        padded_inputs = padded_inputs.view(batch, seqlen, *rest)
+        output = torch.zeros(batch * seqlen, *rest, dtype=inputs.dtype, device=inputs.device)
+        output[indices] = inputs
+        padded_inputs = output.view(batch, seqlen, *rest)
 
     padded_labels = None
     if labels is not None:
-        # Create a mask for valid positions
-        valid_mask = (pos.unsqueeze(0) == indices.unsqueeze(1)).to(labels.dtype)
-        # First create labels with ignore_index everywhere
-        padded_labels = torch.full((batch * seqlen,), ignore_index, 
-                                 dtype=labels.dtype, device=labels.device)
-        # Then only fill in the valid positions using the mask
-        padded_labels = (labels.unsqueeze(-1) * valid_mask).sum(0) + \
-                       ignore_index * (1 - valid_mask.sum(0))
+        padded_labels = torch.full((batch * seqlen,), fill_value=ignore_index, dtype=labels.dtype, device=labels.device)
+        padded_labels[indices] = labels
         padded_labels = padded_labels.view(batch, seqlen)
 
     return padded_inputs, padded_labels
+
+# def pad_input(
+#     inputs: Tensor,
+#     indices: Tensor,
+#     batch: int,
+#     seqlen: int,
+#     labels: Optional[Tensor] = None,
+#     ignore_index: int = -100,
+# ) -> Tuple[Tensor, Optional[Tensor]]:
+#     """
+#     Add padding to sequences while perfectly preserving gradient computation graph.
+#     Uses only operations on the input tensor without creating new tensors.
+#     """
+#     if inputs.dim() == 1:
+#         pos = torch.arange(batch * seqlen, device=inputs.device)
+#         mask = (pos.unsqueeze(0) == indices.unsqueeze(1)).to(inputs.dtype)
+#         padded_inputs = (inputs.unsqueeze(-1) * mask).sum(0).view(batch, seqlen)
+#     else:
+#         _, *rest = inputs.shape
+#         pos = torch.arange(batch * seqlen, device=inputs.device)
+#         mask = (pos.unsqueeze(0) == indices.unsqueeze(1)).to(inputs.dtype)
+#         padded_inputs = (inputs.view(inputs.size(0), -1).unsqueeze(-1) * mask.unsqueeze(1)).sum(0)
+#         padded_inputs = padded_inputs.view(batch, seqlen, *rest)
+
+#     padded_labels = None
+#     if labels is not None:
+#         # Create a mask for valid positions
+#         valid_mask = (pos.unsqueeze(0) == indices.unsqueeze(1)).to(labels.dtype)
+#         # First create labels with ignore_index everywhere
+#         padded_labels = torch.full((batch * seqlen,), ignore_index, 
+#                                  dtype=labels.dtype, device=labels.device)
+#         # Then only fill in the valid positions using the mask
+#         padded_labels = (labels.unsqueeze(-1) * valid_mask).sum(0) + \
+#                        ignore_index * (1 - valid_mask.sum(0))
+#         padded_labels = padded_labels.view(batch, seqlen)
+
+#     return padded_inputs, padded_labels

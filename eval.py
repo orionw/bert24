@@ -40,6 +40,7 @@ from composer.callbacks import (
     OptimizerMonitor,
     RuntimeEstimator,
     SpeedMonitor,
+    EarlyStopper,
 )
 from composer.loggers import WandBLogger
 from composer.optim.scheduler import (
@@ -68,10 +69,6 @@ TASK_NAME_TO_CLASS = {
     "multirc": superglue_jobs_module.MultiRCJob,
     "wic": superglue_jobs_module.WiCJob,
     "swag": misc_jobs_module.SWAGJob,
-    "eurlex": misc_jobs_module.EurlexJob,
-    "ultrafeedback": misc_jobs_module.UltrafeedbackJob,
-    "mlmmlu_amateur_semipro": misc_jobs_module.MLMMLUAmateurSemipro,
-    "mlmmlu_rookie_reserve": misc_jobs_module.MLMMLUReserveRookie,
 }
 
 GLUE_TASKS = {"mnli", "rte", "mrpc", "qnli", "qqp", "sst2", "stsb", "cola"}
@@ -105,6 +102,14 @@ def build_callback(name, kwargs):
         return OptimizerMonitor(
             log_optimizer_metrics=kwargs.get("log_optimizer_metrics", True),
         )
+    elif name == "early_stopper":
+        return EarlyStopper(
+            monitor=kwargs.get('metric_to_monitor'),
+            dataloader_label=kwargs.get('task'),
+            patience='1000ba', # 2x eval_interval to have some datapoints
+            comp=torch.greater,
+            min_delta=0.01,
+            )
     else:
         raise ValueError(f"Not sure how to build callback: {name}")
 
@@ -133,13 +138,16 @@ def build_optimizer(cfg, model):
     if cfg is None:
         return None
 
+    assert cfg.name == "decoupled_adamw", "Only decoupled adamw is supported for this eval script"
+
     if cfg.get("filter_bias_norm_wd", False):
         params = param_groups_weight_decay(model, weight_decay=cfg.weight_decay)
     else:
         params = model.parameters()
 
     if cfg.name == "decoupled_adamw":
-        return DecoupledAdamW(params, lr=cfg.lr, betas=list(cfg.betas), eps=cfg.eps, weight_decay=cfg.weight_decay)
+        weight_decay = cfg.lr / 10 
+        return DecoupledAdamW(params, lr=cfg.lr, betas=list(cfg.betas), eps=cfg.eps, weight_decay=weight_decay)
     elif cfg.name == "adamw":
         print(
             "INFO: You might want to increase the weight decay because in AdamW it is scaled by the lr."
@@ -206,6 +214,17 @@ def build_model(cfg: DictConfig, num_labels: int, multiple_choice: bool = False,
         )
     elif cfg.name == "flex_bert":
         return flex_bert_module.create_flex_bert_classification(
+            num_labels=num_labels,
+            pretrained_model_name=cfg.pretrained_model_name,
+            pretrained_checkpoint=cfg.get("pretrained_checkpoint", None),
+            model_config=cfg.get("model_config", None),
+            tokenizer_name=cfg.get("tokenizer_name", None),
+            gradient_checkpointing=cfg.get("gradient_checkpointing", None),
+            multiple_choice=multiple_choice,
+            **kwargs,
+        )
+    elif cfg.name == "flex_gpt":
+        return flex_bert_module.create_flex_gpt_classification(
             num_labels=num_labels,
             pretrained_model_name=cfg.pretrained_model_name,
             pretrained_checkpoint=cfg.get("pretrained_checkpoint", None),
@@ -285,6 +304,7 @@ def create_job_configs(
 ):
     configs = []
     for task_name, task_config in main_config.tasks.items():
+        task_name = main_config.get("task", task_name)
         if main_config.get("base_run_name") is None:
             main_config.base_run_name = os.environ.get("COMPOSER_RUN_NAME", "glue")
         if task_name not in tasks_to_run:
@@ -340,7 +360,7 @@ def run_job_worker(
 ) -> Any:
     """Instantiates the job object and runs it."""
     # need to set seed before model initialization for determinism
-    reproducibility.configure_deterministic_mode()
+    # reproducibility.configure_deterministic_mode()
     reproducibility.seed_all(config.seed)
     task_cls = TASK_NAME_TO_CLASS[config.task]
 
@@ -350,7 +370,6 @@ def run_job_worker(
         multiple_choice=task_cls.multiple_choice,
         custom_eval_metrics=task_cls.custom_eval_metrics,
     )
-
     instantiated_job = task_cls(
         job_name=config.job_name,
         seed=config.seed,
@@ -529,15 +548,7 @@ def train(config: om.DictConfig) -> None:
             torch.cuda.device_count() > 0
         ), "Can only use parallel mode if GPUs are available. Please set parallel=False."
 
-    # Downloads the starting checkpoint ahead of time so that
-    # the different tasks don't all try to download it at the same time
-    if config.get("starting_checkpoint_load_path", None):
-        local_pretrain_checkpoint_path = download_starting_checkpoint(
-            config.starting_checkpoint_load_path,
-            config.local_pretrain_checkpoint_folder,
-        )
-    else:
-        local_pretrain_checkpoint_path = None
+    local_pretrain_checkpoint_path = config.get("starting_checkpoint_load_path", None)
 
     # Builds round 1 configs and runs them by first filtering out all round 2 tasks
     if round_2_task_names:
@@ -678,6 +689,9 @@ if __name__ == "__main__":
         yaml_cfg = om.OmegaConf.load(f)
 
     cli_cfg = om.OmegaConf.from_cli(args_list)
+    # need to properly parse the args
+    cli_cfg = {k.lstrip('--'): v for k, v in cli_cfg.items()}
+    cli_cfg = om.OmegaConf.create(cli_cfg)
     cfg = om.OmegaConf.merge(yaml_cfg, cli_cfg)
 
     if cfg.model.name == "mosaic_bert":
@@ -686,4 +700,8 @@ if __name__ == "__main__":
         cfg = om.OmegaConf.merge(cfg, default_cfg)
 
     assert isinstance(cfg, om.DictConfig)
+    # resolve interpolations after merging
+    resolved_cfg = om.OmegaConf.to_container(cfg, resolve=True, structured_config_mode=False)
+    cfg = om.OmegaConf.create(resolved_cfg)
+    print(f"Config : \n {cfg}")
     train(cfg)

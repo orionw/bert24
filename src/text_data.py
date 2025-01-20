@@ -350,6 +350,7 @@ def build_no_streaming_dataset(
         max_seq_len=cfg.dataset.max_seq_len,
         pad_sequences=pad_sequences,
         is_decoder=cfg.dataset.get("suppress_masking", False),
+        padding_is_okay=cfg.dataset.get("padding_is_okay", False),
     )
 
 
@@ -460,7 +461,8 @@ class NoStreamingDataset(Dataset):
         max_seq_len: int,
         tokenizer: Optional[Tokenizer] = None,
         pad_sequences: bool = True,
-        is_decoder: bool = False
+        is_decoder: bool = False,
+        padding_is_okay: bool = False
     ) -> None:
         super().__init__()
         if split is not None:
@@ -483,11 +485,13 @@ class NoStreamingDataset(Dataset):
         self.tokenizer = tokenizer
         self.pad_sequences = pad_sequences
         self.is_decoder = is_decoder
+        self.padding_is_okay = padding_is_okay
         logging.info(f"self.is_decoder={self.is_decoder}")
+        logging.info(f"self.padding_is_okay={self.padding_is_okay}")
 
     def _tokenize(self, text_sample):
         assert self.tokenizer is not None, "Tokenizer required if data is not pretokenized"
-        if self.tokenizer._pad_token is None:
+        if self.tokenizer.pad_token_id is None:
             # Some tokenizers (e.g. GPT2 tokenizer) have no padding token which causes bugs
             raise RuntimeError("If tokenizing on-the-fly, tokenizer must have a pad_token_id")
 
@@ -505,6 +509,13 @@ class NoStreamingDataset(Dataset):
         if "input_ids" in sample:
             for k in list(sample.keys()):
                 if isinstance(sample[k], np.ndarray):
+                    if not self.padding_is_okay:
+                        assert 50283 != sample[k][-1], f"Found 50283 at the end of {k} of sample {index}: {sample[k].tolist()}"
+                    else:
+                        # remove padding from the end iteratively until we reach a non-padding token
+                        while sample[k][-1] == 50283:
+                            sample[k] = sample[k][:-1]
+
                     if sample[k][0] != 50281:
                         sample[k] = np.insert(sample[k], 0, 50281)[: self.max_seq_len]
                     sample[k] = sample[k][: self.max_seq_len] # if it was too long and had EOS, it would skip it here
@@ -513,10 +524,12 @@ class NoStreamingDataset(Dataset):
                         sample[k] = sample[k][: self.max_seq_len - 1]
                         sample[k] = np.append(sample[k], 50282)
                     sample[k] = sample[k][: self.max_seq_len]
-                    assert 50281 in sample[k], f"Did not find 50281 in {k} of sample {index}: {sample[k]}"
-                    assert 50283 not in sample[k], f"Found 50283 in {k} of sample {index}: {sample[k]}"
+                    assert 50281 in sample[k], f"Did not find 50281 in {k} of sample {index}: {sample[k].tolist()}"
+                    # make sure it's not padded
+                    # print the number of pad tokens as a debug
+                    # print(f"Number of pad tokens in {k} of sample {index}: {np.sum(sample[k] == 50283)}")
                     if not self.is_decoder:
-                        assert 50282 in sample[k], f"Did not find 50282 in {k} of sample {index}: {sample[k]}"
+                        assert 50282 in sample[k], f"Did not find 50282 in {k} of sample {index}: {sample[k].tolist()}"
                 else:
                     del sample[k]
             if "attention_mask" not in sample:

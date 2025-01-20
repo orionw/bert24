@@ -4,7 +4,7 @@
 # """Contains GLUE job objects for the simple_glue_trainer."""
 import os
 import sys
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from multiprocessing import cpu_count
 import torch
 
@@ -16,6 +16,7 @@ from composer.core import Callback
 from composer.core.evaluator import Evaluator
 from composer.loggers import LoggerDestination
 from composer.optim import ComposerScheduler, DecoupledAdamW
+from torch.optim import Optimizer
 from src.evals.data import create_glue_dataset
 from src.evals.finetuning_jobs import build_dataloader, ClassificationJob
 
@@ -33,16 +34,15 @@ class MNLIJob(ClassificationJob):
         seed: int = 42,
         eval_interval: str = "2300ba",
         scheduler: Optional[ComposerScheduler] = None,
+        optimizer: Optional[Optimizer] = None,
         max_sequence_length: Optional[int] = 256,
-        max_duration: Optional[str] = "3ep",
-        batch_size: Optional[int] = 48,
+        max_duration: Optional[str] = "2ep",
+        batch_size: Optional[int] = 64,
         load_path: Optional[str] = None,
         save_folder: Optional[str] = None,
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
-        device_eval_microbatch_size: Optional[int] = 1,
-        learning_rate: Optional[float] = 5.0e-4,
         **kwargs,
     ):
         super().__init__(
@@ -53,6 +53,7 @@ class MNLIJob(ClassificationJob):
             task_name="mnli",
             eval_interval=eval_interval,
             scheduler=scheduler,
+            optimizer=optimizer,
             max_sequence_length=max_sequence_length,
             max_duration=max_duration,
             batch_size=batch_size,
@@ -64,13 +65,14 @@ class MNLIJob(ClassificationJob):
             **kwargs,
         )
 
-        self.optimizer = DecoupledAdamW(
-            self.model.parameters(),
-            lr=learning_rate,
-            betas=(0.9, 0.98),
-            eps=1.0e-06,
-            weight_decay=learning_rate / 10,
-        )
+        if optimizer is None:
+            self.optimizer = DecoupledAdamW(
+                self.model.parameters(),
+                lr=5.0e-05,
+                betas=(0.9, 0.98),
+                eps=1.0e-06,
+                weight_decay=1.0e-06,
+            )
 
         dataset_kwargs = {
             "task": self.task_name,
@@ -91,13 +93,11 @@ class MNLIJob(ClassificationJob):
             label="glue_mnli",
             dataloader=build_dataloader(mnli_eval_dataset, **dataloader_kwargs),
             metric_names=["MulticlassAccuracy"],
-            device_eval_microbatch_size=device_eval_microbatch_size
         )
         mnli_evaluator_mismatched = Evaluator(
             label="glue_mnli_mismatched",
             dataloader=build_dataloader(mnli_eval_mismatched_dataset, **dataloader_kwargs),
             metric_names=["MulticlassAccuracy"],
-            device_eval_microbatch_size=device_eval_microbatch_size
         )
         self.evaluators = [mnli_evaluator, mnli_evaluator_mismatched]
 
@@ -115,6 +115,7 @@ class RTEJob(ClassificationJob):
         seed: int = 42,
         eval_interval: str = "100ba",
         scheduler: Optional[ComposerScheduler] = None,
+        optimizer: Optional[Optimizer] = None,
         max_sequence_length: Optional[int] = 256,
         max_duration: Optional[str] = "3ep",
         batch_size: Optional[int] = 16,
@@ -123,8 +124,6 @@ class RTEJob(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
-        device_eval_microbatch_size: Optional[int] = 1,
-        learning_rate: Optional[float] = 1.0e-5,
         **kwargs,
     ):
         super().__init__(
@@ -135,6 +134,7 @@ class RTEJob(ClassificationJob):
             task_name="rte",
             eval_interval=eval_interval,
             scheduler=scheduler,
+            optimizer=optimizer,
             max_sequence_length=max_sequence_length,
             max_duration=max_duration,
             batch_size=batch_size,
@@ -146,13 +146,14 @@ class RTEJob(ClassificationJob):
             **kwargs,
         )
 
-        self.optimizer = DecoupledAdamW(
-            self.model.parameters(),
-            lr=learning_rate,
-            betas=(0.9, 0.98),
-            eps=1.0e-06,
-            weight_decay=learning_rate / 10,
-        )
+        if optimizer is None:
+            self.optimizer = DecoupledAdamW(
+                self.model.parameters(),
+                lr=1.0e-5,
+                betas=(0.9, 0.98),
+                eps=1.0e-06,
+                weight_decay=1.0e-5,
+            )
 
         dataset_kwargs = {
             "task": self.task_name,
@@ -172,7 +173,6 @@ class RTEJob(ClassificationJob):
             label="glue_rte",
             dataloader=build_dataloader(rte_eval_dataset, **dataloader_kwargs),
             metric_names=["MulticlassAccuracy"],
-            device_eval_microbatch_size=device_eval_microbatch_size
         )
         self.evaluators = [rte_evaluator]
 
@@ -190,6 +190,7 @@ class QQPJob(ClassificationJob):
         seed: int = 42,
         eval_interval: str = "2000ba",
         scheduler: Optional[ComposerScheduler] = None,
+        optimizer: Optional[Optimizer] = None,
         max_sequence_length: Optional[int] = 256,
         max_duration: Optional[str] = "5ep",
         batch_size: Optional[int] = 16,
@@ -198,8 +199,6 @@ class QQPJob(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
-        device_eval_microbatch_size: Optional[int] = 1,
-        learning_rate: Optional[float] = 3.0e-5,
         **kwargs,
     ):
         super().__init__(
@@ -210,6 +209,7 @@ class QQPJob(ClassificationJob):
             task_name="qqp",
             eval_interval=eval_interval,
             scheduler=scheduler,
+            optimizer=optimizer,
             max_sequence_length=max_sequence_length,
             max_duration=max_duration,
             batch_size=batch_size,
@@ -221,13 +221,14 @@ class QQPJob(ClassificationJob):
             **kwargs,
         )
 
-        self.optimizer = DecoupledAdamW(
-            self.model.parameters(),
-            lr=3.0e-5,
-            betas=(0.9, 0.98),
-            eps=1.0e-06,
-            weight_decay=3.0e-6,
-        )
+        if optimizer is None:
+            self.optimizer = DecoupledAdamW(
+                self.model.parameters(),
+                lr=3.0e-5,
+                betas=(0.9, 0.98),
+                eps=1.0e-06,
+                weight_decay=3.0e-6,
+            )
 
         dataset_kwargs = {
             "task": self.task_name,
@@ -264,6 +265,7 @@ class COLAJob(ClassificationJob):
         seed: int = 42,
         eval_interval: str = "250ba",
         scheduler: Optional[ComposerScheduler] = None,
+        optimizer: Optional[Optimizer] = None,
         max_sequence_length: Optional[int] = 256,
         max_duration: Optional[str] = "10ep",
         batch_size: Optional[int] = 32,
@@ -272,8 +274,6 @@ class COLAJob(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
-        device_eval_microbatch_size: Optional[int] = 1,
-        learning_rate: Optional[float] = 5.0e-5,
         **kwargs,
     ):
         super().__init__(
@@ -284,6 +284,7 @@ class COLAJob(ClassificationJob):
             task_name="cola",
             eval_interval=eval_interval,
             scheduler=scheduler,
+            optimizer=optimizer,
             max_sequence_length=max_sequence_length,
             max_duration=max_duration,
             batch_size=batch_size,
@@ -295,13 +296,14 @@ class COLAJob(ClassificationJob):
             **kwargs,
         )
 
-        self.optimizer = DecoupledAdamW(
-            self.model.parameters(),
-            lr=learning_rate,
-            betas=(0.9, 0.98),
-            eps=1.0e-06,
-            weight_decay=learning_rate / 10,
-        )
+        if optimizer is None:
+            self.optimizer = DecoupledAdamW(
+                self.model.parameters(),
+                lr=5.0e-5,
+                betas=(0.9, 0.98),
+                eps=1.0e-06,
+                weight_decay=5.0e-6,
+            )
 
         dataset_kwargs = {
             "task": self.task_name,
@@ -338,6 +340,7 @@ class MRPCJob(ClassificationJob):
         seed: int = 42,
         eval_interval: str = "100ba",
         scheduler: Optional[ComposerScheduler] = None,
+        optimizer: Optional[Optimizer] = None,
         max_sequence_length: Optional[int] = 256,
         max_duration: Optional[str] = "10ep",
         batch_size: Optional[int] = 32,
@@ -346,8 +349,6 @@ class MRPCJob(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
-        device_eval_microbatch_size: Optional[int] = 1,
-        learning_rate: Optional[float] = 8.0e-5,
         **kwargs,
     ):
         super().__init__(
@@ -358,6 +359,7 @@ class MRPCJob(ClassificationJob):
             task_name="mrpc",
             eval_interval=eval_interval,
             scheduler=scheduler,
+            optimizer=optimizer,
             max_sequence_length=max_sequence_length,
             max_duration=max_duration,
             batch_size=batch_size,
@@ -369,13 +371,14 @@ class MRPCJob(ClassificationJob):
             **kwargs,
         )
 
-        self.optimizer = DecoupledAdamW(
-            self.model.parameters(),
-            lr=learning_rate,
-            betas=(0.9, 0.98),
-            eps=1.0e-06,
-            weight_decay=learning_rate / 10,
-        )
+        if optimizer is None:
+            self.optimizer = DecoupledAdamW(
+                self.model.parameters(),
+                lr=8.0e-5,
+                betas=(0.9, 0.98),
+                eps=1.0e-06,
+                weight_decay=8.0e-6,
+            )
 
         dataset_kwargs = {
             "task": self.task_name,
@@ -412,6 +415,7 @@ class QNLIJob(ClassificationJob):
         seed: int = 42,
         eval_interval: str = "1000ba",
         scheduler: Optional[ComposerScheduler] = None,
+        optimizer: Optional[Optimizer] = None,
         max_sequence_length: Optional[int] = 256,
         max_duration: Optional[str] = "10ep",
         batch_size: Optional[int] = 16,
@@ -420,8 +424,6 @@ class QNLIJob(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
-        device_eval_microbatch_size: Optional[int] = 1,
-        learning_rate: Optional[float] = 1.0e-5,
         **kwargs,
     ):
         super().__init__(
@@ -432,6 +434,7 @@ class QNLIJob(ClassificationJob):
             task_name="qnli",
             eval_interval=eval_interval,
             scheduler=scheduler,
+            optimizer=optimizer,
             max_sequence_length=max_sequence_length,
             max_duration=max_duration,
             batch_size=batch_size,
@@ -443,13 +446,14 @@ class QNLIJob(ClassificationJob):
             **kwargs,
         )
 
-        self.optimizer = DecoupledAdamW(
-            self.model.parameters(),
-            lr=learning_rate,
-            betas=(0.9, 0.98),
-            eps=1.0e-06,
-            weight_decay=learning_rate / 10,
-        )
+        if optimizer is None:
+            self.optimizer = DecoupledAdamW(
+                self.model.parameters(),
+                lr=1.0e-5,
+                betas=(0.9, 0.98),
+                eps=1.0e-06,
+                weight_decay=1.0e-6,
+            )
 
         dataset_kwargs = {
             "task": self.task_name,
@@ -486,6 +490,7 @@ class SST2Job(ClassificationJob):
         seed: int = 42,
         eval_interval: str = "500ba",
         scheduler: Optional[ComposerScheduler] = None,
+        optimizer: Optional[Optimizer] = None,
         max_sequence_length: Optional[int] = 256,
         max_duration: Optional[str] = "3ep",
         batch_size: Optional[int] = 16,
@@ -494,8 +499,6 @@ class SST2Job(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
-        device_eval_microbatch_size: Optional[int] = 1,
-        learning_rate: Optional[float] = 3.0e-5,
         **kwargs,
     ):
         super().__init__(
@@ -506,6 +509,7 @@ class SST2Job(ClassificationJob):
             task_name="sst2",
             eval_interval=eval_interval,
             scheduler=scheduler,
+            optimizer=optimizer,
             max_sequence_length=max_sequence_length,
             max_duration=max_duration,
             batch_size=batch_size,
@@ -517,13 +521,14 @@ class SST2Job(ClassificationJob):
             **kwargs,
         )
 
-        self.optimizer = DecoupledAdamW(
-            self.model.parameters(),
-            lr=learning_rate,
-            betas=(0.9, 0.98),
-            eps=1.0e-06,
-            weight_decay=learning_rate / 10,
-        )
+        if optimizer is None:
+            self.optimizer = DecoupledAdamW(
+                self.model.parameters(),
+                lr=3.0e-5,
+                betas=(0.9, 0.98),
+                eps=1.0e-06,
+                weight_decay=3.0e-6,
+            )
 
         dataset_kwargs = {
             "task": self.task_name,
@@ -560,6 +565,7 @@ class STSBJob(ClassificationJob):
         seed: int = 42,
         eval_interval: str = "200ba",
         scheduler: Optional[ComposerScheduler] = None,
+        optimizer: Optional[Optimizer] = None,
         max_sequence_length: Optional[int] = 256,
         max_duration: Optional[str] = "10ep",
         batch_size: Optional[int] = 32,
@@ -568,8 +574,6 @@ class STSBJob(ClassificationJob):
         loggers: Optional[List[LoggerDestination]] = None,
         callbacks: Optional[List[Callback]] = None,
         precision: Optional[str] = None,
-        device_eval_microbatch_size: Optional[int] = 1,
-        learning_rate: Optional[float] = 3.0e-5,
         **kwargs,
     ):
         super().__init__(
@@ -580,6 +584,7 @@ class STSBJob(ClassificationJob):
             task_name="stsb",
             eval_interval=eval_interval,
             scheduler=scheduler,
+            optimizer=optimizer,
             max_sequence_length=max_sequence_length,
             max_duration=max_duration,
             batch_size=batch_size,
@@ -591,13 +596,14 @@ class STSBJob(ClassificationJob):
             **kwargs,
         )
 
-        self.optimizer = DecoupledAdamW(
-            self.model.parameters(),
-            lr=learning_rate,
-            betas=(0.9, 0.98),
-            eps=1.0e-06,
-            weight_decay=learning_rate / 10,
-        )
+        if optimizer is None:
+            self.optimizer = DecoupledAdamW(
+                self.model.parameters(),
+                lr=3.0e-5,
+                betas=(0.9, 0.98),
+                eps=1.0e-06,
+                weight_decay=3.0e-6,
+            )
 
         dataset_kwargs = {
             "task": self.task_name,
@@ -617,7 +623,6 @@ class STSBJob(ClassificationJob):
             label="glue_stsb",
             dataloader=build_dataloader(stsb_eval_dataset, **dataloader_kwargs),
             metric_names=["SpearmanCorrCoef"],
-            device_eval_microbatch_size=device_eval_microbatch_size
         )
         self.evaluators = [stsb_evaluator]
 

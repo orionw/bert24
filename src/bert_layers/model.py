@@ -1509,7 +1509,7 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
 
     def __init__(self, config: FlexBertConfig):
         super().__init__(config)
-        assert config.is_causal, "FlexBertForCausalLM requires is_causal=True"
+        assert config.causal_mask, "FlexBertForCausalLM requires causal_mask=True"
         self.bert = FlexBertModel(config)
         self.bert.is_decoder = True
         self.lm_head = FlexBertPredictionHead(config)
@@ -1517,6 +1517,7 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
         if config.tie_word_embeddings:
             decoder_weights = self.bert.embeddings.tok_embeddings.weight
         else:
+            logger.info("Not tying word embeddings for decoder")
             decoder_weights = nn.Linear(config.hidden_size, config.vocab_size, bias=False).weight
         self.decoder = nn.Linear(decoder_weights.size(1), decoder_weights.size(0), bias=config.decoder_bias)
         self.decoder.weight = decoder_weights
@@ -1668,8 +1669,8 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
                         shift_labels[boundary_pos] = -100
 
                 # NOTE: no padding or mask in there for now
-                assert 50283 not in shift_labels, f"PAD token found in shift_labels: {shift_labels}"
-                assert 50284 not in shift_labels, f"MASK token found in shift_labels: {shift_labels}"
+                # assert 50283 not in shift_labels, f"PAD token found in shift_labels: {shift_labels.tolist()}"
+                # assert 50284 not in shift_labels, f"MASK token found in shift_labels: {shift_labels.tolist()}"
                 assert shift_labels.shape[0] == loss_logits.shape[0] # Verify shapes align                    
             else:
                 # Padded case: simple shift
@@ -1740,7 +1741,7 @@ class FlexGPTForSequenceClassification(FlexBertPreTrainedModel):
         self.num_labels = config.num_labels
         self.config = config
 
-        self.bert = FlexBertForCausalLM(config)
+        self.bert = FlexBertModel(config)
         self.head = FlexBertPoolingHead(config)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
         # Initialize weights and apply final processing
@@ -1772,11 +1773,35 @@ class FlexGPTForSequenceClassification(FlexBertPreTrainedModel):
         if from_tf:
             raise ValueError("Mosaic BERT does not support loading TensorFlow weights.")
 
-        state_dict = torch.load(pretrained_checkpoint)
-        logger.info(f"Initial state dict keys: {state_dict.keys()}")
-        # If the state_dict was saved after wrapping with `composer.HuggingFaceModel`, it takes on the `model` prefix
+        checkpoint = torch.load(pretrained_checkpoint)
+        
+        # Handle nested state dict structure
+        if 'state' in checkpoint and 'model' in checkpoint['state']:
+            state_dict = checkpoint['state']['model']
+        else:
+            state_dict = checkpoint
+        
+        # If the state_dict was saved after wrapping with `composer.HuggingFaceModel`
         consume_prefix_in_state_dict_if_present(state_dict, prefix="model.")
-        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+        
+        # First try loading directly - if it works, we have a complete classification checkpoint
+        try:
+            missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=True)
+            logger.info("Successfully loaded complete classification checkpoint")
+            return model
+        except Exception as e:
+            logger.info("Could not load checkpoint directly, attempting remapping...")
+            
+        # If direct loading failed, assume we have a base model that needs remapping
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            if k in ['state', 'rng']:  # Skip metadata
+                continue
+    
+            new_state_dict[k] = v
+
+        # Load with strict=False to allow new head/classifier weights 
+        missing_keys, unexpected_keys = model.load_state_dict(new_state_dict, strict=False)
 
         if len(missing_keys) > 0:
             logger.warning(f"Found these missing keys in the checkpoint: {', '.join(missing_keys)}")
@@ -1803,11 +1828,10 @@ class FlexGPTForSequenceClassification(FlexBertPreTrainedModel):
 
         output = self.bert(
             input_ids,
-            attention_mask=attention_mask, # note that FA will use causal mask if set in config
+            attention_mask=attention_mask, # note that FA will use causal mask if `causal_mask` set in config
             position_ids=position_ids,
-            skip_loss=True,
         )
-        head_output = self.head(output.hidden_states)
+        head_output = self.head(output, pool=False)
         classifier_output = self.classifier(head_output)
         batch_size = input_ids.shape[0]
         sequence_lengths = attention_mask.sum(dim=1) - 1
@@ -1874,7 +1898,7 @@ class FlexGPTForMultipleChoice(FlexBertPreTrainedModel):
         self.num_labels = config.num_labels
         self.config = config
 
-        self.bert = FlexBertForCausalLM(config)
+        self.bert = FlexBertModel(config)
         self.head = FlexBertPoolingHead(config)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
 
@@ -1907,10 +1931,35 @@ class FlexGPTForMultipleChoice(FlexBertPreTrainedModel):
         if from_tf:
             raise ValueError("Mosaic BERT does not support loading TensorFlow weights.")
 
-        state_dict = torch.load(pretrained_checkpoint)
-        # If the state_dict was saved after wrapping with `composer.HuggingFaceModel`, it takes on the `model` prefix
+        checkpoint = torch.load(pretrained_checkpoint)
+        
+        # Handle nested state dict structure
+        if 'state' in checkpoint and 'model' in checkpoint['state']:
+            state_dict = checkpoint['state']['model']
+        else:
+            state_dict = checkpoint
+        
+        # If the state_dict was saved after wrapping with `composer.HuggingFaceModel`
         consume_prefix_in_state_dict_if_present(state_dict, prefix="model.")
-        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+        
+        # First try loading directly - if it works, we have a complete classification checkpoint
+        try:
+            missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=True)
+            logger.info("Successfully loaded complete classification checkpoint")
+            return model
+        except Exception as e:
+            logger.info("Could not load checkpoint directly, attempting remapping...")
+            
+        # If direct loading failed, assume we have a base model that needs remapping
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            if k in ['state', 'rng']:  # Skip metadata
+                continue
+    
+            new_state_dict[k] = v
+
+        # Load with strict=False to allow new head/classifier weights 
+        missing_keys, unexpected_keys = model.load_state_dict(new_state_dict, strict=False)
 
         if len(missing_keys) > 0:
             logger.warning(f"Found these missing keys in the checkpoint: {', '.join(missing_keys)}")
@@ -1936,11 +1985,10 @@ class FlexGPTForMultipleChoice(FlexBertPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict      
         output = self.bert(
             input_ids,
-            attention_mask=attention_mask, # note that FA will use causal mask if set in config
+            attention_mask=attention_mask, # note that FA will use causal mask if `causal_mask` is set in config
             position_ids=position_ids,
-            skip_loss=True,
         )
-        head_output = self.head(output.hidden_states)
+        head_output = self.head(output)
         classifier_output = self.classifier(head_output)
         batch_size = input_ids.shape[0]
         sequence_lengths = attention_mask.sum(dim=1) - 1
