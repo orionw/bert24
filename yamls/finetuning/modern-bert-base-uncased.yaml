@@ -12,13 +12,14 @@ run_name: finetune-modern-bert
 default_seed: 42
 parallel: false
 
-tokenizer_name: bclavie/bert24_32k_tok_llama2
+tokenizer_name: answerdotai/modernbert-base
 max_seq_len: 128
 
-load_path: /home/oweller2/my_scratch/retrieval_pretraining/bert24/models_pythia_like/encoder_no_packing/ep0-ba599525-rank0.pt
+# load_path: /home/oweller2/my_scratch/retrieval_pretraining/bert24/models_pythia_like/encoder_no_packing/ep0-ba599525-rank0.pt
+load_path: /home/oweller2/my_scratch/retrieval_pretraining/bert24/models_pythia_like/decoder_base_no_packing_v3/ep0-ba599525-rank0.pt
 # Model
 model:
-  name: mosaic_bert
+  name: flex_gpt
   num_labels: 2 # <-- Make sure to update these after you modify the starter script!
   use_pretrained: true
   pretrained_model_name: bert-base-uncased
@@ -65,7 +66,9 @@ model:
     global_attn_every_n_layers: 3
     unpad_embeddings: true
     compile_model: true
-    masked_prediction: true
+    # masked_prediction: true
+    masked_prediction: false
+    causal_mask: true
 
 # Dataloaders (make sure to update these after you modify the starter script!)
 train_loader:
@@ -103,7 +106,7 @@ optimizer:
 # Training duration and evaluation frequency
 max_duration: 10ep
 eval_interval: 1ep
-global_train_batch_size: 16
+global_train_batch_size: 64
 
 # System
 seed: 17
