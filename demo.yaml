@@ -1,4 +1,4 @@
-data_local: "demo-data"
+data_local: "c4-36b-baseline"
 data_remote: # If blank, files must be present in data_local
 
 max_seq_len: 1024
