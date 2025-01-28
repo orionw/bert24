@@ -402,6 +402,10 @@ def main(cfg: DictConfig, return_trainer: bool = False, do_train: bool = True) -
     # Scheduler
     scheduler = build_scheduler(cfg.scheduler)
 
+    # if cfg.get("restart_lr_max", False):
+    #     optimizer.initial_lr = cfg.optimizer.lr
+    #     optimizer.max_lr = cfg.optimizer.lr
+
     # Loggers
     loggers = [build_logger(name, logger_cfg) for name, logger_cfg in cfg.get("loggers", {}).items()]
 
@@ -465,7 +469,7 @@ def main(cfg: DictConfig, return_trainer: bool = False, do_train: bool = True) -
         # the learning rate and weight deacy. It's only been tested with the warmup_stable_decay scheduler
         if cfg.get("restart_override", False):
             print("Overriding checkpoint's scheduler & optimizer LR & WD, and train microbatch size with config options")  # fmt: skip
-            if cfg.scheduler.name not in ["constant_with_warmup", "warmup_stable_decay"]:
+            if cfg.scheduler.name not in ["constant_with_warmup", "warmup_stable_decay", "one_minus_sqrt"]:
                 print("Rescaling current step LR by ratio of new LR to old LR. This may require scaling the scheduler's alpha_f")  # fmt: skip
                 for param_group in trainer.state.optimizers[0].param_groups:
                     lr_ratio = cfg.optimizer.lr / param_group["lr"]
@@ -490,6 +494,7 @@ def main(cfg: DictConfig, return_trainer: bool = False, do_train: bool = True) -
                 reset_time=cfg.get("reset_time", False),
             )
         else:
+            print(optimizer, scheduler)
             trainer.fit(reset_time=cfg.get("reset_time", False))
 
     if return_trainer:
