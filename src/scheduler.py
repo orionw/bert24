@@ -2,7 +2,7 @@ from enum import Enum
 import math
 import textwrap
 import warnings
-from typing import Union
+from typing import Union, List, Tuple
 
 from composer.core import State, Time, TimeUnit
 from composer.optim.scheduler import (
@@ -287,3 +287,89 @@ class OneMinusSqrtScheduler(ComposerScheduler):
             relative_time = (current_time - (t_max - t_decay)) / t_decay
             lr_scale = self.alpha_f + (1 - self.alpha_f) * (1 - math.sqrt(relative_time.value))
             return max(self.alpha_f, lr_scale)
+
+
+class CompositeScheduler(ComposerScheduler):
+    """Combines multiple schedulers in sequence, each running for a specified duration.
+    
+    Args:
+        schedulers: List of (scheduler, duration) tuples, where duration is a Time or str
+            specifying how long that scheduler should run for. The last scheduler's duration 
+            should be "remainder" to use remaining time.
+        t_max (str | Time): Total duration of the schedule. Default = "1dur".
+        scale_schedules (bool): Whether to scale scheduler durations with SSR. Default = False.
+        
+    Example:
+        >>> scheduler = CompositeScheduler(
+        ...     schedulers=[
+        ...         (WarmupStableDecayScheduler(t_warmup="1000ba", alpha_f=1.0), "1000ba"),
+        ...         (OneMinusSqrtScheduler(alpha_f=0.1), "remainder")
+        ...     ],
+        ...     t_max="10000ba"
+        ... )
+    """
+    
+    def __init__(
+        self,
+        schedulers: List[Tuple[ComposerScheduler, Union[str, Time]]],
+        t_max: Union[str, Time] = "1dur",
+        scale_schedules: bool = False,
+    ):
+        if not schedulers:
+            raise ValueError("Must provide at least one scheduler")
+            
+        scheduler, duration = schedulers[-1]
+        if duration != "remainder":
+            raise ValueError("Last scheduler duration must be 'remainder'")
+        
+        # init the scheduler
+        self.scheduler_specs = schedulers
+        self.t_max = t_max
+        self.scale_schedules = scale_schedules
+        
+    def _get_active_scheduler(
+        self, 
+        state: State,
+        timestamp: Time,
+        ssr: float = 1.0
+    ) -> tuple[ComposerScheduler, float]:
+        """Find the active scheduler and its start time."""
+        current_time = 0
+        
+        # Check each scheduler except the last one
+        for scheduler, duration in self.scheduler_specs[:-1]:
+            if isinstance(duration, str):
+                duration = _convert_time(duration, state, ssr=ssr if self.scale_schedules else 1.0)
+            
+            next_time = current_time + duration.value
+            if timestamp.value < next_time:
+                # Current scheduler is active
+                return scheduler, current_time
+                
+            current_time = next_time
+            
+        # If we get here, use the last scheduler
+        last_scheduler, _ = self.scheduler_specs[-1]
+        return last_scheduler, current_time
+        
+    def __call__(self, state: State, ssr: float = 1.0) -> float:
+        """Returns the learning rate multiplier for the current state."""
+        assert state.max_duration is not None, "max_duration should be set whenever schedulers are invoked"
+        
+        t_max = _convert_time(self.t_max, state, ssr=ssr)
+        current_timestamp = state.timestamp.get(t_max.unit)
+        assert t_max.unit == "tok", f"t_max must be in tokens, got {t_max.unit}"
+        
+        # Find active scheduler
+        scheduler, start_time = self._get_active_scheduler(state, current_timestamp, ssr)
+        
+        # Convert current timestamp to scheduler's relative time
+        relative_timestamp = Time(current_timestamp.value - start_time, current_timestamp.unit)
+        
+        new_timestamp_for_sub_scheduler = state.timestamp.copy(token=relative_timestamp.value)
+        original_timestamp = state.timestamp
+        state.timestamp = new_timestamp_for_sub_scheduler
+        return_val = scheduler(state, ssr)
+        state.timestamp = original_timestamp
+        return return_val
+        

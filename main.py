@@ -40,7 +40,7 @@ from src.callbacks.dataloader_speed import DataloaderSpeedMonitor
 from src.callbacks.log_grad_norm import LogGradNorm
 from src.callbacks.packing_efficiency import PackingEfficency
 from src.callbacks.scheduled_gc import ScheduledGarbageCollector
-from src.scheduler import CosineInverseSqrtScheduler, OneMinusSqrtScheduler, WarmupStableDecayScheduler
+from src.scheduler import CosineInverseSqrtScheduler, OneMinusSqrtScheduler, WarmupStableDecayScheduler, CompositeScheduler
 from src.sequence_packer import get_num_samples_in_packed_batch, split_packed_batch
 
 
@@ -165,7 +165,7 @@ def build_logger(name, kwargs):
         raise ValueError(f"Not sure how to build logger: {name}")
 
 
-def build_scheduler(cfg):
+def build_single_scheduler(cfg):
     if cfg.name == "constant_with_warmup":
         return ConstantWithWarmupScheduler(t_warmup=cfg.t_warmup)
     elif cfg.name == "cosine_with_warmup":
@@ -191,6 +191,53 @@ def build_scheduler(cfg):
     else:
         raise ValueError(f"Not sure how to build scheduler: {cfg.name}")
 
+def build_scheduler(cfg):
+    """Build a scheduler from config, supporting both single and composite schedulers.
+    
+    The config can either be a single scheduler config or a composite config like:
+    ```yaml
+    scheduler:
+      name: composite
+      t_max: 10ep  # optional, defaults to "1dur"
+      schedulers:
+        - name: linear_decay_with_warmup
+          t_warmup: 100ba
+          alpha_f: 1.0
+          duration: 500ba
+          
+        - name: constant_with_warmup
+          t_warmup: 0ba
+          duration: 2ep
+          
+        - name: cosine_inverse_sqrt
+          t_warmup: 0ba
+          t_cooldown: 100ba
+          alpha_f: 0.1
+          duration: remainder
+    ```
+    """
+    if not hasattr(cfg, "name"):
+        raise ValueError("Scheduler config must have a 'name' field")
+        
+    if cfg.name != "composite":
+        return build_single_scheduler(cfg)
+        
+    # Handle composite scheduler
+    if not hasattr(cfg, "schedulers"):
+        raise ValueError("Composite scheduler config must have a 'schedulers' field")
+        
+    scheduler_specs = []
+    for scheduler_cfg in cfg.schedulers:
+        if not hasattr(scheduler_cfg, "duration"):
+            raise ValueError("Each scheduler in composite must specify a 'duration'")
+            
+        scheduler = build_single_scheduler(scheduler_cfg)
+        scheduler_specs.append((scheduler, scheduler_cfg.duration))
+        
+    return CompositeScheduler(
+        schedulers=scheduler_specs,
+        t_max=cfg.get("t_max", "1dur")
+    )
 
 def build_optimizer(cfg, model):
     if cfg.get("filter_bias_norm_wd", False):

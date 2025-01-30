@@ -1568,7 +1568,9 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
             decoder_weights = self.bert.embeddings.tok_embeddings.weight
         else:
             logger.info("Not tying word embeddings for decoder")
+            assert False, f"Not tying word embeddings for decoder"
             decoder_weights = nn.Linear(config.hidden_size, config.vocab_size, bias=False).weight
+            
         self.decoder = nn.Linear(decoder_weights.size(1), decoder_weights.size(0), bias=config.decoder_bias)
         self.decoder.weight = decoder_weights
 
