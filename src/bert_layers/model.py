@@ -1247,6 +1247,113 @@ class FlexBertForMaskedLM(FlexBertPreTrainedModel):
             params += _count_parameters(self.decoder, trainable)
         return params
 
+class MNTPFlexBertForMaskedLM(FlexBertForMaskedLM):
+    """FlexBert with Masked Next Token Prediction (MNTP)."""
+    
+    def forward(
+        self,
+        input_ids: Optional[torch.Tensor],
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        return_dict: Optional[bool] = None,
+        indices: Optional[torch.Tensor] = None,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        seq_len: Optional[int] = None,
+        **kwargs,
+    ) -> Union[Tuple[torch.Tensor], MaskedLMOutput]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        
+        if self.unpad_embeddings and (indices is None and cu_seqlens is None and max_seqlen is None):
+            batch_size, seq_len = input_ids.shape[:2]
+            input_ids, indices, cu_seqlens, max_seqlen, position_ids, labels = self.unpad_inputs(
+                input_ids, attention_mask, position_ids, labels
+            )
+
+        output = self.bert(
+            input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            indices=indices,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+        )
+
+        if self.masked_prediction and labels is not None:
+            # flatten labels and output first
+            labels = labels.view(-1)
+            output = output.view(labels.shape[0], -1)
+
+            # then filter out the non-masked tokens
+            # but use the positions BEFORE masked tokens for prediction
+            mask_tokens = (labels != self.loss_fn.ignore_index)
+            mask_tokens = mask_tokens[1:]  # shift right to get previous positions
+            output = output[:-1][mask_tokens]  # use previous position's hidden states
+            labels = labels[1:][mask_tokens]  # use corresponding labels
+
+        if self.compile_model:
+            logits = self.compiled_head(output)
+        else:
+            logits = self.decoder(self.head(output))
+
+        loss = None
+        if labels is not None:
+            if not self.masked_prediction:
+                labels = labels.view(-1)
+                logits = logits.view(labels.shape[0], -1)
+
+            if self.return_z_loss:
+                loss, z_loss = self.loss_fn(logits, labels)
+                if self.pad_logits:
+                    return MaskedLMOutputZLoss(
+                        loss=loss,
+                        ce_loss=loss.detach().clone() - z_loss,
+                        z_loss=z_loss,
+                        logits=self.pad_inputs(logits, indices, batch_size, seq_len)[0],
+                        hidden_states=None,
+                        attentions=None,
+                    )
+                else:
+                    return MaskedLMOutputZLoss(
+                        loss=loss,
+                        ce_loss=loss.detach().clone() - z_loss,
+                        z_loss=z_loss,
+                        logits=logits,
+                        hidden_states=None,
+                        attentions=None,
+                        indices=indices,
+                        cu_seqlens=cu_seqlens,
+                        max_seqlen=max_seqlen,
+                        batch_size=batch_size,
+                        seq_len=seq_len,
+                        labels=labels,
+                    )
+            else:
+                loss = self.loss_fn(logits, labels)
+
+        if self.pad_logits:
+            return MaskedLMOutput(
+                loss=loss,
+                logits=self.pad_inputs(logits, indices, batch_size, seq_len)[0],
+                hidden_states=None,
+                attentions=None,
+            )
+        else:
+            return MaskedLMOutput(
+                loss=loss,
+                logits=logits,
+                hidden_states=None,
+                attentions=None,
+                indices=indices,
+                cu_seqlens=cu_seqlens,
+                max_seqlen=max_seqlen,
+                batch_size=batch_size,
+                seq_len=seq_len,
+                labels=labels,
+            )
+
 
 class FlexBertForSequenceClassification(FlexBertPreTrainedModel):
     """Bert Model transformer with a sequence classification/regression head.

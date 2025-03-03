@@ -7,6 +7,8 @@ This script creates sweeps in the UI from a list of configs. The sweep IDs are w
 Those sweeps are then run with launch_sweeps.sh script.
 """
 
+seed = 42
+
 
 def create_sweep_for_config(config_path, task):
     parent_task = "glue"
@@ -15,9 +17,11 @@ def create_sweep_for_config(config_path, task):
     # load yaml
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
+
+    epochs = [1, 2, 3] if task in ["mnli", "sst2", "rte"] else [2, 5, 10, 12, 15]
         
     sweep_config = {
-        "name": config_path.split('/')[-1].replace("-sweep", "").replace(".yaml", ""),
+        "name": config_path.split('/')[-1].replace("-sweep", "").replace(".yaml", "") + f"-seed-{seed}",
         "command": [
             "${env}",
             "${interpreter}",
@@ -25,20 +29,20 @@ def create_sweep_for_config(config_path, task):
             config_path,
             "${args}"
         ],
-        "method": "random",
+        "method": "grid",
         "metric": {
             "goal": "maximize",
             "name": f"metrics/{parent_task}_{task}/MulticlassAccuracy"
         },
         "parameters": {
-            "device_train_microbatch_size": {"values": [64]},
             "task": {"values": [task]},
             "starting_cp": {"values": [config["starting_cp"]]},
-            "learning_rate": {"values": [1e-5, 3e-5, 5e-5, 8e-5]},
-            "max_duration": {"values": [1, 2, 3]},
+            "learning_rate": {"values": [1e-5, 3e-5, 5e-5, 8e-5, 1e-4, 3e-4] }, # 
+            "weight_decay": {"values": [8e-6]},
+            "device_train_microbatch_size": {"values": [16, 32, 64, 128]},
+            "max_duration": {"values": epochs},
         },
         "program": "eval.py",
-        "run_cap": 60,
     }
 
     sweep_id = wandb.sweep(sweep_config, project="better_glue_sweeps", entity="mmarone-jhu")
@@ -95,32 +99,59 @@ def create_new_config_for_sweep(task_config_path, model_size, model_type, best_c
     # Define the checkpoint mapping
     model_dirs = {
         "encoder": {
-            "very_tiny": "encoder_very_tiny_no_packing",
-            "tiny": "encoder_tiny_no_packing_v2",
-            "mini": "encoder_mini_no_packing",
-            "base": "encoder_no_packing",
-            "large": "encoder_large_no_packing",
-            "huge": "encoder_huge_no_packing"
+            "very_tiny": "encoder_very_tiny_no_packing_prolong_decay",
+            "tiny": "encoder_tiny_no_packing_v2_prolong_decay",
+            "mini": "encoder_mini_no_packing_prolong_decay",
+            "base": "encoder_base_no_packing_prolong_decay_lower_mask",
+            # "base": "encoder_base_no_packing_prolong_decay_low_lr_long",
+            # "base": "encoder_base_no_packing_prolong_decay_low_lr",
+            # "base": "encoder_base_no_packing_prolong_decay",
+
+            "large": "encoder_large_no_packing_prolong_decay",
+            "huge": "encoder_huge_no_packing_prolong_decay"
         },
         "decoder": {
-            "very_tiny": "decoder_very_tiny_no_packing",
-            "tiny": "decoder_tiny_no_packing_v2",
-            "mini": "decoder_mini_no_packing",
-            "base": "decoder_base_no_packing_v3",
-            "large": "decoder_large_no_packing_v2",
-            "huge": "decoder_huge_no_packing"
+            "very_tiny": "decoder_very_tiny_no_packing_prolong_decay",
+            "tiny": "decoder_tiny_no_packing_v2_prolong_decay",
+            "mini": "decoder_mini_no_packing_prolong_decay",
+            "base": "decoder_base_no_packing_v3_prolong_decay",
+            "large": "decoder_large_no_packing_prolong_decay",
+            "huge": "decoder_huge_no_packing_prolong_decay"
+        }
+    }
+
+    model2batch_size = {
+        "encoder": {
+            "base": 256,
+            "large": 128,
+            "huge": 64,
+            "tiny": 512,
+            "mini": 512,
+            "very_tiny": 512
+        },
+        "decoder": {
+            "base": 196,
+            "large": 128,
+            "huge": 64,
+            "tiny": 512,
+            "mini": 512,
+            "very_tiny": 512
         }
     }
     
     # Get the task name
     task = task_config_path.split('/')[-1].replace(".yaml", "").replace("-sweep", "")
     model_name = f"{model_type}-{model_size}-{task}"
-    new_config["base_run_name"] = model_name
+    new_config["base_run_name"] = model_name + f"-seed-{seed}"
+    new_config["default_seed"] = seed
+    new_config["tasks"]["abc"]["seeds"] = [seed]
 
-    # update the save folders, e.g. local_pretrain_checkpoint_folder and save_finetune_checkpoint_prefix
-    # TODO
-    new_config["local_pretrain_checkpoint_folder"] = f"./bert-finetune-checkpoints-best-{model_name}-pretrain-{model_type}"
-    new_config["save_finetune_checkpoint_prefix"] = f"./bert-finetune-checkpoints-best-{model_name}-{model_type}"
+
+    new_config["local_pretrain_checkpoint_folder"] = f"./ft_sweeps/{model_name}-pretrain-{model_type}-{task}"
+    new_config["save_finetune_checkpoint_prefix"] = f"./ft_sweeps/{model_name}-{model_type}-{task}"
+
+    batch_size = model2batch_size[model_type][model_size]
+    new_config["device_train_microbatch_size"] = batch_size
     
     # Handle checkpoints
     if best_checkpoint_map and task in ["mrpc", "stsb", "rte"]:
@@ -134,15 +165,15 @@ def create_new_config_for_sweep(task_config_path, model_size, model_type, best_c
     else:
         # Use default checkpoint from model_dirs mapping
         model_dir = model_dirs[model_type][model_size]
-        new_config["starting_cp"] = f"latest-rank0/{model_dir}"
+        new_config["starting_cp"] = f"/home/oweller2/my_scratch/retrieval_pretraining/bert24/models_pythia_like/{model_dir}/latest-rank0.pt"
     
     # Create output path for the new config
     output_path = f"/home/oweller2/my_scratch/retrieval_pretraining/bert24/yamls/finetuning/glue/{model_type}-{model_size}-{task}.yaml"
     
-    breakpoint()
     # Save the new config
     with open(output_path, 'w') as f:
         yaml.dump(new_config, f, default_flow_style=False)
+    print(f"created new config at {output_path}")
     
     return output_path
 
@@ -157,37 +188,39 @@ stage1_configs = [
 
 ]
 
-all_sweep_ids = {}
+sweep_id_map = {}
 for config_path in stage1_configs:
-    for model_size in ["very_tiny", "tiny", "mini", "base", "large", "huge"]:
-        for model_type in ["encoder", "decoder"]:
+    for model_size in ["base"]: # ["mini", "very_tiny", "tiny", "mini", "base"]: # , "large", "huge"]:
+        for model_type in ["encoder"]: # , "decoder"]:
             # create the config for this yaml file and save it to the same path
             config_path_for_sweep = create_new_config_for_sweep(config_path, model_size, model_type)
             task = config_path.split('/')[-1].replace(".yaml", "").replace("-sweep", "")
-            # sweep_id = create_sweep_for_config(config_path_for_sweep, task)
-            # all_sweep_ids[config_path_for_sweep] = sweep_id
+            sweep_id = create_sweep_for_config(config_path_for_sweep, task)
+            sweep_id_map[f"{model_type}-{model_size}-{task}-{seed}"] = sweep_id
 
-# # save sweep IDs to a txt
-# with open('sweep_ids.txt', 'w') as f:
-#     for config_path, sweep_id in all_sweep_ids.items():
-#         f.write(f"{sweep_id},{config_path}\n")
+# save sweep IDs to a txt
+with open('sweep_ids.json', 'w') as f:
+    json.dump(sweep_id_map, f, indent=4)
 
-stage2_configs = [
-    "/home/oweller2/my_scratch/retrieval_pretraining/bert24/yamls/finetuning/glue/tasks/mrpc.yaml",
-    "/home/oweller2/my_scratch/retrieval_pretraining/bert24/yamls/finetuning/glue/tasks/stsb.yaml",
-    "/home/oweller2/my_scratch/retrieval_pretraining/bert24/yamls/finetuning/glue/tasks/rte.yaml",
-]
+# stage2_configs = [
+#     "/home/oweller2/my_scratch/retrieval_pretraining/bert24/yamls/finetuning/glue/tasks/mrpc.yaml",
+#     "/home/oweller2/my_scratch/retrieval_pretraining/bert24/yamls/finetuning/glue/tasks/stsb.yaml",
+#     "/home/oweller2/my_scratch/retrieval_pretraining/bert24/yamls/finetuning/glue/tasks/rte.yaml",
+# ]
 
-best_checkpoint_map = "best_checkpoint_map.json"
-all_sweep_ids = {}
-for config_path in stage2_configs:
-    for model_size in ["very_tiny", "tiny", "small", "base", "large", "huge"]:
-        for model_type in ["encoder", "decoder"]:
-            # create the config for this yaml file and save it to the same path
-            config_path_for_sweep = create_new_config_for_sweep(config_path, model_size, model_type, best_checkpoint_map)
-            # sweep_id = create_sweep_for_config(config_path_for_sweep)
-            # all_sweep_ids[config_path_for_sweep] = sweep_id
+# best_checkpoint_map = "best_checkpoint_map.json"
+# all_sweep_ids = {}
+# for config_path in stage2_configs:
+#     for model_size in ["very_tiny", "tiny", "small", "base", "large", "huge"]:
+#         for model_type in ["encoder", "decoder"]:
+#             # create the config for this yaml file and save it to the same path
+#             config_path_for_sweep = create_new_config_for_sweep(config_path, model_size, model_type, best_checkpoint_map)
+#             # sweep_id = create_sweep_for_config(config_path_for_sweep)
+#             # all_sweep_ids[config_path_for_sweep] = sweep_id
 
 # with open('sweep_ids_stage2.txt', 'w') as f:
 #     for config_path, sweep_id in all_sweep_ids.items():
 #         f.write(f"{sweep_id},{config_path}\n")
+
+
+# then run wanbd agents for slurm

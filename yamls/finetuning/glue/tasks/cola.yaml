@@ -4,7 +4,7 @@ max_duration: 1
 weight_decay: 5e-6
 device_train_microbatch_size: 64
 task: cola
-metric_to_monitor: MatthewsCorrCoef
+metric_to_monitor: MulticlassMatthewsCorrCoef
 
 
 max_seq_len: 512
@@ -50,7 +50,6 @@ model:
     hidden_size: 768
     init_method: full_megatron
     intermediate_size: 1152
-    local_attn_rotary_emb_base: 10000.0
     local_attn_rotary_emb_dim: null
     loss_function: fa_cross_entropy
     loss_kwargs:
@@ -67,6 +66,7 @@ model:
     num_hidden_layers: 22
     padding: unpadded
     rotary_emb_base: 160000.0
+    local_attn_rotary_emb_base: 160000.0
     rotary_emb_dim: null
     rotary_emb_interleaved: false
     rotary_emb_scale_base: null
