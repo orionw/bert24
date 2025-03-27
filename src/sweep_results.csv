@@ -1,0 +1,6 @@
+group,metric_name,metric_value,run_id,learning_rate,weight_decay,max_duration
+encoder_size=base | dataset=qqp,metrics/glue_qqp/MulticlassAccuracy,0.922928512096405,4gqj78jc,5e-05,5e-06,10
+encoder_size=base | dataset=mnli,metrics/glue_mnli/MulticlassAccuracy,0.8901681303977966,r92wpg4h,8e-05,1e-06,1
+encoder_size=base | dataset=qnli,metrics/glue_qnli/MulticlassAccuracy,0.9370309114456176,td97kvos,8e-05,8e-07,2
+encoder_size=base | dataset=sst2,metrics/glue_sst2/MulticlassAccuracy,0.9541284441947936,eysenae8,8e-05,3e-05,3
+encoder_size=base | dataset=cola,metrics/glue_cola/MulticlassMatthewsCorrCoef,0.6307435631752014,gpr7o400,0.0001,1e-06,10

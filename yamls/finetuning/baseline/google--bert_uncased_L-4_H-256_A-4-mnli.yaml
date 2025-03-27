@@ -1,0 +1,54 @@
+base_run_name: google--bert_uncased_L-4_H-256_A-4-mnli-seed-42
+callbacks:
+  early_stopper:
+    metric_to_monitor: ${metric_to_monitor}
+    task: ${task}
+  lr_monitor: {}
+  speed_monitor: {}
+default_seed: 42
+device_train_microbatch_size: 64
+learning_rate: 5e-5
+loggers:
+  wandb:
+    entity: mmarone-jhu
+    project: sweeps
+max_duration: 1
+max_seq_len: 512
+metric_to_monitor: MulticlassAccuracy
+model:
+  name: hf_bert
+  pretrained_model_name: google/bert_uncased_L-4_H-256_A-4
+  tokenizer_name: google/bert_uncased_L-4_H-256_A-4
+  use_pretrained: true
+optimizer:
+  betas:
+  - 0.9
+  - 0.98
+  eps: 1.0e-06
+  filter_bias_norm_wd: true
+  log_grad_norm: true
+  lr: ${learning_rate}
+  name: decoupled_adamw
+  weight_decay: ${weight_decay}
+parallel: false
+precision: amp_bf16
+save_finetune_checkpoint_folder: ./ft_sweeps/baseline/mnli/google--bert_uncased_L-4_H-256_A-4_folder
+save_finetune_checkpoint_prefix: ./ft_sweeps/baseline/mnli/google--bert_uncased_L-4_H-256_A-4
+save_num_checkpoints_to_keep: 1
+scheduler:
+  alpha_f: 0.0
+  name: linear_decay_with_warmup
+  t_warmup: 0.06dur
+task: mnli
+tasks:
+  abc:
+    seeds:
+    - 42
+    trainer_kwargs:
+      batch_size: ${device_train_microbatch_size}
+      max_duration: ${max_duration}
+      max_sequence_length: ${max_seq_len}
+      save_num_checkpoints_to_keep: ${save_num_checkpoints_to_keep}
+      save_overwrite: true
+tokenizer_name: google/bert_uncased_L-4_H-256_A-4
+weight_decay: 5e-6

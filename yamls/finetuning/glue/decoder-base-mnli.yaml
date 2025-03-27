@@ -6,9 +6,9 @@ callbacks:
   lr_monitor: {}
   speed_monitor: {}
 default_seed: 19
-device_train_microbatch_size: 64
+device_train_microbatch_size: 196
 learning_rate: 5e-5
-local_pretrain_checkpoint_folder: ./bert-finetune-checkpoints-best-decoder-base-mnli-pretrain-decoder
+local_pretrain_checkpoint_folder: ./ft_sweeps/decoder-base-mnli-pretrain-decoder-mnli
 loggers:
   wandb:
     entity: mmarone-jhu
@@ -56,7 +56,6 @@ model:
     normalization: layernorm
     num_attention_heads: 12
     num_hidden_layers: 22
-    num_layers: 22
     pad_logits: true
     padding: unpadded
     rotary_emb_base: 160000.0
@@ -86,14 +85,14 @@ optimizer:
 parallel: false
 precision: amp_bf16
 save_finetune_checkpoint_folder: ${save_finetune_checkpoint_prefix}/${base_run_name}
-save_finetune_checkpoint_prefix: ./bert-finetune-checkpoints-best-decoder-base-mnli-decoder
+save_finetune_checkpoint_prefix: ./ft_sweeps/decoder-base-mnli-decoder-mnli
 save_num_checkpoints_to_keep: 2
 scheduler:
   alpha_f: 0.0
   name: linear_decay_with_warmup
   t_warmup: 0.06dur
 starting_checkpoint_load_path: ${starting_cp}
-starting_cp: latest-rank0/decoder_base_no_packing_v3
+starting_cp: /home/oweller2/my_scratch/retrieval_pretraining/bert24/models_pythia_like/decoder_base_no_packing_v3_prolong_decay/latest-rank0.pt
 task: mnli
 tasks:
   abc:

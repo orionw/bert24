@@ -515,7 +515,6 @@ class NoStreamingDataset(Dataset):
                         # remove padding from the end iteratively until we reach a non-padding token
                         while sample[k][-1] == 50283:
                             sample[k] = sample[k][:-1]
-
                     if sample[k][0] != 50281:
                         sample[k] = np.insert(sample[k], 0, 50281)[: self.max_seq_len]
                     sample[k] = sample[k][: self.max_seq_len] # if it was too long and had EOS, it would skip it here
@@ -524,6 +523,7 @@ class NoStreamingDataset(Dataset):
                         sample[k] = sample[k][: self.max_seq_len - 1]
                         sample[k] = np.append(sample[k], 50282)
                     sample[k] = sample[k][: self.max_seq_len]
+                    # print(f"One example: {sample[k].tolist()}")
                     assert 50281 in sample[k], f"Did not find 50281 in {k} of sample {index}: {sample[k].tolist()}"
                     # make sure it's not padded
                     # print the number of pad tokens as a debug

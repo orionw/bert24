@@ -1,0 +1,62 @@
+{
+  "encoder_size=base | dataset=qnli": {
+    "metric_value": 0.936481773853302,
+    "metric_name": "metrics/glue_qnli/MulticlassAccuracy",
+    "run_id": "t0jkx4b5",
+    "sweep_id": "0j55gcoh",
+    "sweep_name": "encoder-base-qnli_task=qnli_seed=42",
+    "hyperparameters": {
+      "learning_rate": 8e-05,
+      "weight_decay": 5e-06,
+      "max_duration": 2
+    }
+  },
+  "encoder_size=base | dataset=qqp": {
+    "metric_value": 0.9147415161132812,
+    "metric_name": "metrics/glue_qqp/MulticlassAccuracy",
+    "run_id": "t8aed2hg",
+    "sweep_id": "wmo6mc20",
+    "sweep_name": "encoder-base-qqp_task=qqp_seed=42",
+    "hyperparameters": {
+      "learning_rate": 1e-05,
+      "weight_decay": 8e-06,
+      "max_duration": 10
+    }
+  },
+  "encoder_size=base | dataset=mnli": {
+    "metric_value": 0.890575647354126,
+    "metric_name": "metrics/glue_mnli/MulticlassAccuracy",
+    "run_id": "9ixmpuqe",
+    "sweep_id": "ufm5knv4",
+    "sweep_name": "encoder-base-mnli_task=mnli_seed=42",
+    "hyperparameters": {
+      "learning_rate": 5e-05,
+      "weight_decay": 3e-05,
+      "max_duration": 2
+    }
+  },
+  "encoder_size=base | dataset=sst2": {
+    "metric_value": 0.9564220309257508,
+    "metric_name": "metrics/glue_sst2/MulticlassAccuracy",
+    "run_id": "bhov9p83",
+    "sweep_id": "oq6xia70",
+    "sweep_name": "encoder-base-sst2_task=sst2_seed=42",
+    "hyperparameters": {
+      "learning_rate": 8e-05,
+      "weight_decay": 3e-06,
+      "max_duration": 3
+    }
+  },
+  "encoder_size=base | dataset=cola": {
+    "metric_value": 0.6364216208457947,
+    "metric_name": "metrics/glue_cola/MulticlassMatthewsCorrCoef",
+    "run_id": "i40fm64a",
+    "sweep_id": "48xyy47d",
+    "sweep_name": "encoder-base-cola_task=cola_seed=42",
+    "hyperparameters": {
+      "learning_rate": 0.0001,
+      "weight_decay": 8e-06,
+      "max_duration": 10
+    }
+  }
+}

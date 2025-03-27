@@ -1,7 +1,7 @@
 import wandb
 import yaml
 import json
-
+import copy
 """
 This script creates sweeps in the UI from a list of configs. The sweep IDs are written to a text file.
 Those sweeps are then run with launch_sweeps.sh script.
@@ -10,7 +10,17 @@ Those sweeps are then run with launch_sweeps.sh script.
 seed = 42
 
 
-def create_sweep_for_config(config_path, task):
+metric_map = {
+    "mnli": "MulticlassAccuracy",
+    "cola": "MulticlassMatthewsCorrCoef",
+    "qnli": "MulticlassAccuracy",
+    "qqp": "MulticlassAccuracy",
+    "sst2": "MulticlassAccuracy",
+    "mrpc": "MulticlassAccuracy",
+    "stsb": "SpearmanCorrCoef",
+}
+
+def create_sweep_for_config(config_path, task, model_type, model_size):
     parent_task = "glue"
     print(f"found task {task} of parent task : {parent_task}")
     
@@ -18,39 +28,71 @@ def create_sweep_for_config(config_path, task):
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
 
-    epochs = [1, 2, 3] if task in ["mnli", "sst2", "rte"] else [2, 5, 10, 12, 15]
-        
+    epochs = [1, 2, 3, 4] if task in ["mnli", "sst2", "rte"] else [2, 5, 10, 12]
+
+    # Define sweep parameters
+    learning_rates = [1e-5, 3e-5, 5e-5, 8e-5, 1e-4]
+    weight_decays = [1e-6, 5e-6, 8e-6, 1e-5]
+    batch_sizes = [16, 32]
+    
+    # Create folder to store parameter-specific configs
+    import os
+    config_dir = f"/home/oweller2/my_scratch/retrieval_pretraining/bert24/sweep_param_configs/{task}/{model_type}/{model_size}"
+    os.makedirs(config_dir, exist_ok=True)
+    
+    # Generate all parameter combinations with explicit paths for sweep command
+    param_configs = []
+    config_commands = []
+    
+    for lr in learning_rates:
+        for wd in weight_decays:
+            for bs in batch_sizes:
+                for ep in epochs:
+                    # Create a unique identifier for this parameter combination
+                    param_str = f"{task}_{model_type}_{model_size}_lr{lr}_wd{wd}_bs{bs}_ep{ep}"
+                    
+                    # Create a copy of the config
+                    param_config = copy.deepcopy(config)
+                    
+                    # Update with the parameter values
+                    param_config["local_pretrain_checkpoint_folder"] = f"/home/oweller2/my_scratch/retrieval_pretraining/bert24/ft_sweeps/{task}/{model_type}/{model_size}/{param_str}-pretrain"
+                    param_config["save_finetune_checkpoint_prefix"] = f"/home/oweller2/my_scratch/retrieval_pretraining/bert24/ft_sweeps/{task}/{model_type}/{model_size}/{param_str}"
+                    param_config["base_run_name"] = param_str
+                    param_config["learning_rate"] = lr
+                    param_config["weight_decay"] = wd
+                    param_config["device_train_microbatch_size"] = bs
+                    param_config["max_duration"] = ep
+                    
+                    # Save to a new config file
+                    param_config_path = f"{config_dir}/{param_str}.yaml"
+                    with open(param_config_path, 'w') as f:
+                        yaml.dump(param_config, f)
+                    
+                    # Add to list of config paths for parameters
+                    param_configs.append({"path": param_config_path, "name": param_str})
+    
+    # Create sweep with the generated configs
+    # Create a command for each config directly
     sweep_config = {
-        "name": config_path.split('/')[-1].replace("-sweep", "").replace(".yaml", "") + f"-seed-{seed}",
+        "name": f"{model_type}-{model_size}-{task}-{seed}",
         "command": [
-            "${env}",
             "${interpreter}",
             "${program}",
-            config_path,
             "${args}"
         ],
         "method": "grid",
         "metric": {
             "goal": "maximize",
-            "name": f"metrics/{parent_task}_{task}/MulticlassAccuracy"
+            "name": f"metrics/{parent_task}_{task}/{metric_map[task]}"
         },
         "parameters": {
-            "task": {"values": [task]},
-            "starting_cp": {"values": [config["starting_cp"]]},
-            "learning_rate": {"values": [1e-5, 3e-5, 5e-5, 8e-5, 1e-4, 3e-4] }, # 
-            "weight_decay": {"values": [8e-6]},
-            "device_train_microbatch_size": {"values": [16, 32, 64, 128]},
-            "max_duration": {"values": epochs},
+            "config_path": {"values": [p["path"] for p in param_configs]},
         },
         "program": "eval.py",
     }
 
-    sweep_id = wandb.sweep(sweep_config, project="better_glue_sweeps", entity="mmarone-jhu")
-
-
+    sweep_id = wandb.sweep(sweep_config, project="encoder_glue_sweeps_fixed_save", entity="mmarone-jhu")
     return sweep_id
-
-
 
 def create_new_config_for_sweep(task_config_path, model_size, model_type, best_checkpoint_map=None):
     """
@@ -99,16 +141,12 @@ def create_new_config_for_sweep(task_config_path, model_size, model_type, best_c
     # Define the checkpoint mapping
     model_dirs = {
         "encoder": {
-            "very_tiny": "encoder_very_tiny_no_packing_prolong_decay",
-            "tiny": "encoder_tiny_no_packing_v2_prolong_decay",
-            "mini": "encoder_mini_no_packing_prolong_decay",
+            "very_tiny": "encoder_very_tiny_no_packing_prolong_decay_lower_mask",
+            "tiny": "encoder_tiny_no_packing_v2_prolong_decay_lower_mask",
+            "mini": "encoder_mini_no_packing_prolong_decay_lower_mask",
             "base": "encoder_base_no_packing_prolong_decay_lower_mask",
-            # "base": "encoder_base_no_packing_prolong_decay_low_lr_long",
-            # "base": "encoder_base_no_packing_prolong_decay_low_lr",
-            # "base": "encoder_base_no_packing_prolong_decay",
-
-            "large": "encoder_large_no_packing_prolong_decay",
-            "huge": "encoder_huge_no_packing_prolong_decay"
+            "large": "encoder_large_no_packing_prolong_decay_lower_mask",
+            "huge": "encoder_huge_no_packing_prolong_decay_lower_mask"
         },
         "decoder": {
             "very_tiny": "decoder_very_tiny_no_packing_prolong_decay",
@@ -120,25 +158,6 @@ def create_new_config_for_sweep(task_config_path, model_size, model_type, best_c
         }
     }
 
-    model2batch_size = {
-        "encoder": {
-            "base": 256,
-            "large": 128,
-            "huge": 64,
-            "tiny": 512,
-            "mini": 512,
-            "very_tiny": 512
-        },
-        "decoder": {
-            "base": 196,
-            "large": 128,
-            "huge": 64,
-            "tiny": 512,
-            "mini": 512,
-            "very_tiny": 512
-        }
-    }
-    
     # Get the task name
     task = task_config_path.split('/')[-1].replace(".yaml", "").replace("-sweep", "")
     model_name = f"{model_type}-{model_size}-{task}"
@@ -150,8 +169,7 @@ def create_new_config_for_sweep(task_config_path, model_size, model_type, best_c
     new_config["local_pretrain_checkpoint_folder"] = f"./ft_sweeps/{model_name}-pretrain-{model_type}-{task}"
     new_config["save_finetune_checkpoint_prefix"] = f"./ft_sweeps/{model_name}-{model_type}-{task}"
 
-    batch_size = model2batch_size[model_type][model_size]
-    new_config["device_train_microbatch_size"] = batch_size
+    new_config["device_train_microbatch_size"] = 64 # will get overwritten by sweep
     
     # Handle checkpoints
     if best_checkpoint_map and task in ["mrpc", "stsb", "rte"]:
@@ -190,12 +208,13 @@ stage1_configs = [
 
 sweep_id_map = {}
 for config_path in stage1_configs:
-    for model_size in ["base"]: # ["mini", "very_tiny", "tiny", "mini", "base"]: # , "large", "huge"]:
+    # for model_size in ["very_tiny", "tiny", "mini", "base", "huge"]: 
+    for model_size in ["large"]: 
         for model_type in ["encoder"]: # , "decoder"]:
             # create the config for this yaml file and save it to the same path
             config_path_for_sweep = create_new_config_for_sweep(config_path, model_size, model_type)
             task = config_path.split('/')[-1].replace(".yaml", "").replace("-sweep", "")
-            sweep_id = create_sweep_for_config(config_path_for_sweep, task)
+            sweep_id = create_sweep_for_config(config_path_for_sweep, task, model_size, model_type)
             sweep_id_map[f"{model_type}-{model_size}-{task}-{seed}"] = sweep_id
 
 # save sweep IDs to a txt

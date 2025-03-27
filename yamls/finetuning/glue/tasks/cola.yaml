@@ -8,7 +8,7 @@ metric_to_monitor: MulticlassMatthewsCorrCoef
 
 
 max_seq_len: 512
-save_num_checkpoints_to_keep: 2
+save_num_checkpoints_to_keep: 1
 
 # Whether to run the various GLUE jobs serially or in parallel (use parallel=True to take advantage of multiple GPUs)
 parallel: false

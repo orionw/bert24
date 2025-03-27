@@ -83,6 +83,8 @@ def create_hf_bert_mlm(
     if not pretrained_model_name:
         pretrained_model_name = "bert-base-uncased"
 
+    breakpoint()
+
     if use_pretrained:
         assert (
             transformers.AutoModelForMaskedLM.from_pretrained is not None

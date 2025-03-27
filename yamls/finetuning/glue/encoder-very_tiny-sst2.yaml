@@ -1,14 +1,14 @@
-base_run_name: decoder-huge-mnli
+base_run_name: encoder-very_tiny-sst2-seed-42
 callbacks:
   early_stopper:
     metric_to_monitor: ${metric_to_monitor}
     task: ${task}
   lr_monitor: {}
   speed_monitor: {}
-default_seed: 19
+default_seed: 42
 device_train_microbatch_size: 64
 learning_rate: 5e-5
-local_pretrain_checkpoint_folder: ./bert-finetune-checkpoints-best-decoder-huge-mnli-pretrain-decoder
+local_pretrain_checkpoint_folder: ./ft_sweeps/encoder-very_tiny-sst2-pretrain-encoder-sst2
 loggers:
   wandb:
     entity: mmarone-jhu
@@ -26,7 +26,7 @@ model:
     attn_out_dropout_prob: 0.1
     attn_qkv_bias: false
     bert_layer: prenorm
-    causal_mask: true
+    causal_mask: false
     compile_model: true
     deterministic_fa2: false
     embed_dropout_prob: 0.0
@@ -37,15 +37,15 @@ model:
     head_class_act: gelu
     head_pred_act: gelu
     hidden_act: gelu
-    hidden_size: 1792
+    hidden_size: 256
     init_method: full_megatron
-    intermediate_size: 3840
-    local_attn_rotary_emb_base: 10000.0
+    intermediate_size: 384
+    local_attn_rotary_emb_base: 160000.0
     local_attn_rotary_emb_dim: null
     loss_function: fa_cross_entropy
     loss_kwargs:
       reduction: mean
-    masked_prediction: false
+    masked_prediction: true
     mlp_dropout_prob: 0.0
     mlp_in_bias: false
     mlp_layer: glu
@@ -54,10 +54,9 @@ model:
       bias: false
       eps: 1.0e-05
     normalization: layernorm
-    num_attention_heads: 28
-    num_hidden_layers: 22
-    num_layers: 28
-    pad_logits: true
+    num_attention_heads: 4
+    num_hidden_layers: 7
+    pad_logits: false
     padding: unpadded
     rotary_emb_base: 160000.0
     rotary_emb_dim: null
@@ -86,15 +85,15 @@ optimizer:
 parallel: false
 precision: amp_bf16
 save_finetune_checkpoint_folder: ${save_finetune_checkpoint_prefix}/${base_run_name}
-save_finetune_checkpoint_prefix: ./bert-finetune-checkpoints-best-decoder-huge-mnli-decoder
-save_num_checkpoints_to_keep: 2
+save_finetune_checkpoint_prefix: ./ft_sweeps/encoder-very_tiny-sst2-encoder-sst2
+save_num_checkpoints_to_keep: 1
 scheduler:
   alpha_f: 0.0
   name: linear_decay_with_warmup
   t_warmup: 0.06dur
 starting_checkpoint_load_path: ${starting_cp}
-starting_cp: latest-rank0/decoder_huge_no_packing
-task: mnli
+starting_cp: /home/oweller2/my_scratch/retrieval_pretraining/bert24/models_pythia_like/encoder_very_tiny_no_packing_prolong_decay_lower_mask/latest-rank0.pt
+task: sst2
 tasks:
   abc:
     seeds:

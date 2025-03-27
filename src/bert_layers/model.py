@@ -1249,6 +1249,101 @@ class FlexBertForMaskedLM(FlexBertPreTrainedModel):
 
 class MNTPFlexBertForMaskedLM(FlexBertForMaskedLM):
     """FlexBert with Masked Next Token Prediction (MNTP)."""
+
+    def __init__(self, config: FlexBertConfig):
+        super(FlexBertForMaskedLM, self).__init__(config)
+        self.bert = FlexBertModel(config)
+        self.lm_head = FlexBertPredictionHead(config)
+
+        if config.tie_word_embeddings:
+            decoder_weights = self.bert.embeddings.tok_embeddings.weight
+        else:
+            decoder_weights = nn.Linear(config.hidden_size, config.vocab_size, bias=False).weight
+        self.decoder = nn.Linear(decoder_weights.size(1), decoder_weights.size(0), bias=config.decoder_bias)
+        self.decoder.weight = decoder_weights
+
+        self.loss_fn = nn.CrossEntropyLoss() if not hasattr(config, "loss_function") else get_loss_fn(config)
+        self.fa_ce = getattr(config, "loss_function", "cross_entropy") == "fa_cross_entropy"
+        self.return_z_loss = config.loss_kwargs.get("return_z_loss", False)
+        self.unpad_embeddings = config.unpad_embeddings
+        self.pad_logits = config.pad_logits
+        self.compile_model = config.compile_model
+        self.masked_prediction = config.masked_prediction
+        self.bert.is_decoder = False
+
+        # Initialize weights and apply final processing
+        self._init_weights(reset_params=False)
+
+    def _init_weights(self, module: Optional[nn.Module] = None, reset_params: Optional[bool] = None):
+        assert (module is None) != (reset_params is None), "arg module xor reset_params must be specified"
+        if module:
+            self._init_module_weights(module)
+        else:
+            assert isinstance(reset_params, bool)
+            self.bert._init_weights(reset_params=reset_params)
+            self.lm_head._init_weights(reset_params=reset_params)
+
+            # Output weights.
+            if not self.config.tie_word_embeddings:
+                init_weights(self.config, self.decoder, self.config.hidden_size, type_of_module=ModuleType.final_out)
+
+    @classmethod
+    def from_composer(
+        cls,
+        pretrained_checkpoint,
+        state_dict=None,
+        cache_dir=None,
+        from_tf=False,
+        config=None,
+        *inputs,
+        **kwargs,
+    ):
+        """Load from pre-trained."""
+        model = cls(config, *inputs, **kwargs)
+        if from_tf:
+            raise ValueError("FlexBERT does not support loading TensorFlow weights.")
+
+        state_dict = torch.load(pretrained_checkpoint)
+        # If the state_dict was saved after wrapping with `composer.HuggingFaceModel`, it takes on the `model` prefix
+        consume_prefix_in_state_dict_if_present(state_dict, prefix="model.")
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+
+        if len(missing_keys) > 0:
+            logger.warning(f"Found these missing keys in the checkpoint: {', '.join(missing_keys)}")
+        if len(unexpected_keys) > 0:
+            logger.warning(f"Found these unexpected keys in the checkpoint: {', '.join(unexpected_keys)}")
+
+        return model
+
+    def get_output_embeddings(self):
+        return self.decoder
+
+    def set_output_embeddings(self, new_embeddings):
+        self.decoder = new_embeddings
+
+    @torch.no_grad()
+    def unpad_inputs(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor, position_ids: torch.Tensor, labels: torch.Tensor
+    ):
+        return unpad_input(input_ids, attention_mask, position_ids, labels)
+
+    @torch.no_grad()
+    def pad_inputs(
+        self,
+        inputs: torch.Tensor,
+        indices: torch.Tensor,
+        batch_size: int,
+        seqlen: int,
+        labels: Optional[torch.Tensor] = None,
+        ignore_index: int = -100,
+    ):
+        return pad_input(
+            inputs=inputs, indices=indices, batch=batch_size, seqlen=seqlen, labels=labels, ignore_index=ignore_index
+        )
+
+    @torch.compile(dynamic=True)
+    def compiled_head(self, output: torch.Tensor) -> torch.Tensor:
+        return self.decoder(self.lm_head(output))
     
     def forward(
         self,
@@ -1296,7 +1391,7 @@ class MNTPFlexBertForMaskedLM(FlexBertForMaskedLM):
         if self.compile_model:
             logits = self.compiled_head(output)
         else:
-            logits = self.decoder(self.head(output))
+            logits = self.decoder(self.lm_head(output))
 
         loss = None
         if labels is not None:
@@ -1887,6 +1982,232 @@ class FlexBertForCausalLM(FlexBertPreTrainedModel):
         return params
 
 
+class FlexGPTForCausalLM(FlexBertForCausalLM):
+    """FlexGPT from FlexBertForMLM, a slight misnomer but can't change original class name out of FlexBERT"""
+
+    def __init__(self, config: FlexBertConfig):
+        super(FlexBertForCausalLM, self).__init__(config)
+        assert config.causal_mask, "FlexBertForCausalLM requires causal_mask=True"
+        self.bert = FlexBertModel(config)
+        self.bert.is_decoder = True
+        self.head = FlexBertPredictionHead(config)
+
+        if config.tie_word_embeddings:
+            decoder_weights = self.bert.embeddings.tok_embeddings.weight
+        else:
+            logger.info("Not tying word embeddings for decoder")
+            assert False, f"Not tying word embeddings for decoder"
+            decoder_weights = nn.Linear(config.hidden_size, config.vocab_size, bias=False).weight
+            
+        self.decoder = nn.Linear(decoder_weights.size(1), decoder_weights.size(0), bias=config.decoder_bias)
+        self.decoder.weight = decoder_weights
+
+        self.loss_fn = nn.CrossEntropyLoss() if not hasattr(config, "loss_function") else get_loss_fn(config)
+        self.fa_ce = getattr(config, "loss_function", "cross_entropy") == "fa_cross_entropy"
+        self.return_z_loss = config.loss_kwargs.get("return_z_loss", False)
+        self.unpad_embeddings = config.unpad_embeddings
+        self.pad_logits = config.pad_logits
+        self.compile_model = config.compile_model
+        self.masked_prediction = config.masked_prediction
+
+        # Initialize weights and apply final processing
+        self._init_weights(reset_params=False)
+
+    def _init_weights(self, module: Optional[nn.Module] = None, reset_params: Optional[bool] = None):
+        assert (module is None) != (reset_params is None), "arg module xor reset_params must be specified"
+        if module:
+            self._init_module_weights(module)
+        else:
+            assert isinstance(reset_params, bool)
+            self.bert._init_weights(reset_params=reset_params)
+            self.head._init_weights(reset_params=reset_params)
+
+            if not self.config.tie_word_embeddings:
+                init_weights(self.config, self.decoder, self.config.hidden_size, type_of_module=ModuleType.final_out)
+
+    @classmethod
+    def from_composer(
+        cls,
+        pretrained_checkpoint,
+        state_dict=None,
+        cache_dir=None,
+        from_tf=False,
+        config=None,
+        *inputs,
+        **kwargs,
+    ):
+        """Load from pre-trained."""
+        model = cls(config, *inputs, **kwargs)
+        if from_tf:
+            raise ValueError("Mosaic BERT does not support loading TensorFlow weights.")
+
+        state_dict = torch.load(pretrained_checkpoint)
+        # If the state_dict was saved after wrapping with `composer.HuggingFaceModel`, it takes on the `model` prefix
+        consume_prefix_in_state_dict_if_present(state_dict, prefix="model.")
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+
+        if len(missing_keys) > 0:
+            logger.warning(f"Found these missing keys in the checkpoint: {', '.join(missing_keys)}")
+        if len(unexpected_keys) > 0:
+            logger.warning(f"Found these unexpected keys in the checkpoint: {', '.join(unexpected_keys)}")
+
+        return model
+
+
+    def get_output_embeddings(self):
+        return self.decoder
+
+    def set_output_embeddings(self, new_embeddings):
+        self.decoder = new_embeddings
+
+    @torch.no_grad()
+    def unpad_inputs(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor, position_ids: torch.Tensor, labels: torch.Tensor
+    ):
+        return unpad_input(input_ids, attention_mask, position_ids, labels)
+
+    @torch.no_grad()
+    def pad_inputs(
+        self,
+        inputs: torch.Tensor,
+        indices: torch.Tensor,
+        batch_size: int,
+        seqlen: int,
+        labels: Optional[torch.Tensor] = None,
+        ignore_index: int = -100,
+    ):
+        return pad_input(
+            inputs=inputs, indices=indices, batch=batch_size, seqlen=seqlen, labels=labels, ignore_index=ignore_index
+        )
+
+    @torch.compile(dynamic=True)
+    def compiled_lm_head(self, output: torch.Tensor) -> torch.Tensor:
+        return self.decoder(self.head(output))
+
+    def forward(
+        self,
+        input_ids: Optional[torch.Tensor],
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        return_dict: Optional[bool] = None,
+        indices: Optional[torch.Tensor] = None,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        seq_len: Optional[int] = None,
+        skip_loss: Optional[bool] = False,
+        **kwargs,
+    ) -> Union[Tuple[torch.Tensor], CausalLMOutput]:
+        # labels should be a `torch.LongTensor` of shape
+        # `(batch_size, sequence_length)`. These are used for computing the
+        #  masked language modeling loss.
+        #
+        # Indices should be in `[-100, 0, ..., config.vocab_size]` (see
+        # `input_ids` docstring) Tokens with indices set to `-100` are ignored
+        # (masked), the loss is only computed for the tokens with labels in `[0,
+        # ..., config.vocab_size]`
+        #
+        # Prediction scores are only computed for masked tokens and the (bs,
+        # seqlen) dimensions are flattened
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        if self.unpad_embeddings and (indices is None and cu_seqlens is None and max_seqlen is None):
+            batch_size, seq_len = input_ids.shape[:2]
+            if attention_mask is None:
+                # create all ones, except for padding (TODO?)
+                attention_mask = torch.ones_like(input_ids)
+            input_ids, indices, cu_seqlens, max_seqlen, position_ids, labels = self.unpad_inputs(
+                input_ids, attention_mask, position_ids, labels
+            )
+
+        hidden_states = self.bert(
+            input_ids,
+            attention_mask=None, # let FA do this
+            position_ids=position_ids,
+            indices=indices,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+        )
+
+        logits = None
+        if not skip_loss:
+            if self.compile_model:
+                logits = self.compiled_lm_head(hidden_states)
+            else:
+                logits = self.head(hidden_states)
+
+        loss = None
+        if labels is not None and not skip_loss:
+            if cu_seqlens is not None:                
+                shift_labels = input_ids[1:].clone()    
+                loss_logits = logits[:-1]  # Only shift for loss
+
+                # Mask boundaries, so eos doesn't predict bos
+                for i in range(len(cu_seqlens) - 1):
+                    boundary_pos = cu_seqlens[i+1] - 1
+                    if boundary_pos < len(shift_labels):
+                        shift_labels[boundary_pos] = -100
+
+                # NOTE: no padding or mask in there for now
+                # assert 50283 not in shift_labels, f"PAD token found in shift_labels: {shift_labels.tolist()}"
+                # assert 50284 not in shift_labels, f"MASK token found in shift_labels: {shift_labels.tolist()}"
+                assert shift_labels.shape[0] == loss_logits.shape[0] # Verify shapes align                    
+            else:
+                # Padded case: simple shift
+                shift_labels = input_ids[..., 1:].contiguous()
+                loss_logits = logits[..., :-1, :].contiguous()
+                # mask out PAD tokens in the shift_labels
+                mask = (shift_labels == 50283)
+                shift_labels = torch.where(mask, torch.tensor(-100, device=shift_labels.device), shift_labels)
+                assert shift_labels.shape[0] == loss_logits.shape[0] # Verify shapes align
+
+            # For both cases, we'll use the shifted input_ids as our labels
+            labels = shift_labels
+            
+            # Flatten the tokens
+            loss = self.loss_fn(loss_logits.view(-1, loss_logits.size(-1)), shift_labels.view(-1))
+
+        if self.pad_logits:
+            return CausalLMOutput(
+                loss=loss,
+                logits=self.pad_inputs(logits, indices, batch_size, seq_len)[0] if logits is not None else None,
+                hidden_states=self.pad_inputs(hidden_states, indices, batch_size, seq_len)[0],
+                attentions=None,
+            )
+        else:
+            return CausalLMOutput(
+                loss=loss,
+                logits=logits,
+                hidden_states=hidden_states,
+                attentions=None,
+            )
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        **kwargs
+    ) -> dict:
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
+    def get_number_parameters(self, count_embeddings: bool = True, trainable: bool = True) -> int:
+        """Returns the number of parameters in the model.
+
+        Args:
+            count_embeddings: count the parameters in the embeddings layer, excluding position embeddings.
+            trainable: only count trainable parameters.
+        """
+        params = self.bert.get_number_parameters(count_embeddings, trainable)
+        params += _count_parameters(self.head, trainable)
+        return params
+
+
 class FlexGPTForSequenceClassification(FlexBertPreTrainedModel):
     """GPT Model transformer with a sequence classification/regression head.
 
@@ -1928,6 +2249,7 @@ class FlexGPTForSequenceClassification(FlexBertPreTrainedModel):
         **kwargs,
     ):
         """Load from pre-trained."""
+        print("#########################")
         model = cls(config, *inputs, **kwargs)
         if from_tf:
             raise ValueError("Mosaic BERT does not support loading TensorFlow weights.")

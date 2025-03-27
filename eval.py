@@ -683,7 +683,13 @@ def train(config: om.DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    yaml_path, args_list = sys.argv[1], sys.argv[2:]
+    # yaml_path, args_list = sys.argv[1], sys.argv[2:]
+    # get args they are all --value=X, there is no yaml path
+    args = sys.argv[1:]
+    args_list = [arg for arg in args if arg.startswith("--")]
+    # grab the one that is --config_path=X for the yaml path
+    yaml_path = [arg for arg in args if "--config_path=" in arg][0].split("=")[1]
+    arg_list = [] # no arg list
 
     with open(yaml_path) as f:
         yaml_cfg = om.OmegaConf.load(f)

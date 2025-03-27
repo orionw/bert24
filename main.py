@@ -365,6 +365,26 @@ def build_model(cfg: DictConfig):
             recompute_metric_loss=cfg.get("recompute_metric_loss", False),
             disable_train_metrics=cfg.get("disable_train_metrics", False),
         )
+    elif cfg.name == "flex_gpt_to_bert":
+        return flex_bert_module.create_flex_gpt_to_bert(
+            pretrained_model_name=cfg.pretrained_model_name,
+            pretrained_checkpoint=cfg.get("pretrained_checkpoint", None),
+            model_config=cfg.get("model_config", None),
+            tokenizer_name=cfg.get("tokenizer_name", None),
+            gradient_checkpointing=cfg.get("gradient_checkpointing", None),
+            recompute_metric_loss=cfg.get("recompute_metric_loss", False),
+            disable_train_metrics=cfg.get("disable_train_metrics", False),
+        )
+    elif cfg.name == "flex_bert_to_gpt":
+        return flex_bert_module.create_flex_bert_to_gpt(
+            pretrained_model_name=cfg.pretrained_model_name,
+            pretrained_checkpoint=cfg.get("pretrained_checkpoint", None),
+            model_config=cfg.get("model_config", None),
+            tokenizer_name=cfg.get("tokenizer_name", None),
+            gradient_checkpointing=cfg.get("gradient_checkpointing", None),
+            recompute_metric_loss=cfg.get("recompute_metric_loss", False),
+            disable_train_metrics=cfg.get("disable_train_metrics", False),
+        )
     else:
         raise ValueError(f"Not sure how to build model with name={cfg.name}")
 
@@ -501,6 +521,7 @@ def main(cfg: DictConfig, return_trainer: bool = False, do_train: bool = True) -
         save_overwrite=cfg.get("save_overwrite", False),
         load_path=cfg.get("load_path", None),
         load_weights_only=cfg.get("load_weights_only", False),
+        load_strict_model_weights=cfg.get("load_strict_model_weights", True),
         python_log_level=cfg.get("python_log_level", None),
         autoresume=cfg.get("autoresume", None),
         fsdp_config=cfg.get("fsdp_config", None),

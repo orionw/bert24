@@ -63,7 +63,11 @@ class SequencePackerBatchOutputTuple(NamedTuple):
     labels: Optional[torch.Tensor]
     cu_seq_lens: list[torch.Tensor]
     max_cu_seq_len: list[torch.Tensor]
-
+"""
+        return cls(
+            # output shape
+            out_batch_size=int(batch_size / micro_batch_size),
+"""
 
 class SequencePacker(ABC):
     def __init__(
